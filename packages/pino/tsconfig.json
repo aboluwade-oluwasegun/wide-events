@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "tsconfig.tsbuildinfo",
+    "paths": {
+      "@wide-events/internal": ["packages/internal/dist/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

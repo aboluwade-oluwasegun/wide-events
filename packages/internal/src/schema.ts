@@ -1,7 +1,7 @@
 export const BASELINE_COLUMN_TYPES = {
-  trace_id: "VARCHAR",
-  span_id: "VARCHAR",
-  parent_span_id: "VARCHAR",
+  event_id: "VARCHAR",
+  correlation_id: "VARCHAR",
+  parent_event_id: "VARCHAR",
   ts: "TIMESTAMPTZ",
   duration_ms: "DOUBLE",
   main: "BOOLEAN",
@@ -27,9 +27,9 @@ export const BASELINE_COLUMN_NAMES = Object.freeze(
 );
 
 export const BASE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS events (
-  trace_id VARCHAR NOT NULL,
-  span_id VARCHAR NOT NULL,
-  parent_span_id VARCHAR,
+  event_id VARCHAR NOT NULL,
+  correlation_id VARCHAR NOT NULL,
+  parent_event_id VARCHAR,
   ts TIMESTAMPTZ NOT NULL,
   duration_ms DOUBLE,
   main BOOLEAN NOT NULL DEFAULT false,

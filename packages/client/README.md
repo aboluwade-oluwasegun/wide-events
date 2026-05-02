@@ -24,7 +24,7 @@ const columns = await client.getColumns();
 | `query(request)` | Executes a structured query through `POST /query`. |
 | `sql(queryText)` | Executes read-only SQL through `POST /sql`. |
 | `getColumns()` | Returns collector schema metadata from `GET /columns`. |
-| `getTrace(traceId)` | Returns all rows for a trace from `GET /trace/:id`. |
+| `getEvents(correlationId)` | Returns all rows for a correlation id from `GET /events/:correlationId`. |
 
 ## Structured query DSL
 
@@ -71,9 +71,9 @@ const result = await client.query({
 
 - Omitted `scope` defaults to `"main"`.
 - `"main"` means the collector injects `main = true`.
-- `"all"` queries all stored spans.
+- `"all"` queries all stored events.
 
-Use `"all"` for span-level drill-down or child-span analytics. Leave it at the default for product-style wide-event queries.
+Use `"all"` for event-level drill-down. Leave it at the default for product-style wide-event queries.
 
 ## Raw SQL
 

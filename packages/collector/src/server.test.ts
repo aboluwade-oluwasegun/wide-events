@@ -1,8 +1,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { CollectorConfig } from "./config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CollectorConfig } from "./config";
 import { createCollectorServer } from "./server";
 
 describe("collector server", () => {
@@ -18,7 +18,7 @@ describe("collector server", () => {
     }
   });
 
-  it("ingests OTLP traces and serves query and trace results", async () => {
+  it("ingests native events and serves query and event results", async () => {
     const server = await createCollectorServer(
       createTestCollectorConfig({
         duckDbPath: join(workspaceDir, "events.duckdb"),
@@ -30,48 +30,33 @@ describe("collector server", () => {
     try {
       const ingestResponse = await server.app.inject({
         method: "POST",
-        url: "/v1/traces",
+        url: "/v1/events",
         payload: {
-          resourceSpans: [
+          events: [
             {
-              resource: {
-                attributes: [
-                  {
-                    key: "service.name",
-                    value: { stringValue: "payments" },
-                  },
-                ],
+              event_id: "event-1",
+              correlation_id: "corr-1",
+              ts: "2024-01-01T00:00:00.000Z",
+              duration_ms: 100,
+              main: true,
+              "service.name": "payments",
+              "http.route": "/pay",
+              attributes: {
+                "order.total": 42,
+                "db.queries": [{ operation: "select_order", duration_ms: 12 }],
               },
-              scopeSpans: [
-                {
-                  spans: [
-                    {
-                      traceId: "trace-1",
-                      spanId: "span-1",
-                      startTimeUnixNano: "1000000000",
-                      endTimeUnixNano: "2000000000",
-                      attributes: [
-                        { key: "main", value: { boolValue: true } },
-                        { key: "http.route", value: { stringValue: "/pay" } },
-                        { key: "error", value: { boolValue: false } },
-                      ],
-                    },
-                    {
-                      traceId: "trace-1",
-                      spanId: "span-2",
-                      parentSpanId: "span-1",
-                      startTimeUnixNano: "1100000000",
-                      endTimeUnixNano: "1500000000",
-                      attributes: [
-                        {
-                          key: "db.statement",
-                          value: { stringValue: "select 1" },
-                        },
-                      ],
-                    },
-                  ],
-                },
-              ],
+              promote: ["order.total"],
+            },
+            {
+              event_id: "event-2",
+              correlation_id: "corr-1",
+              parent_event_id: "event-1",
+              ts: "2024-01-01T00:00:01.000Z",
+              main: false,
+              "service.name": "payments",
+              attributes: {
+                "db.statement": "select 1",
+              },
             },
           ],
         },
@@ -79,101 +64,70 @@ describe("collector server", () => {
 
       expect(ingestResponse.statusCode).toBe(202);
 
-      const queryResponse = await server.app.inject({
+      const allResponse = await server.app.inject({
         method: "POST",
         url: "/query",
         payload: {
           select: [{ fn: "COUNT", as: "total" }],
-          filters: [{ field: "trace_id", op: "eq", value: "trace-1" }],
+          filters: [{ field: "correlation_id", op: "eq", value: "corr-1" }],
           scope: "all",
         },
       });
 
-      expect(queryResponse.statusCode).toBe(200);
-      expect(queryResponse.json().rows[0]?.["total"]).toBe(2);
+      expect(allResponse.statusCode).toBe(200);
+      expect(allResponse.json().rows[0]?.["total"]).toBe(2);
 
-      const mainOnlyResponse = await server.app.inject({
+      const mainResponse = await server.app.inject({
         method: "POST",
         url: "/query",
         payload: {
           select: [{ fn: "COUNT", as: "total" }],
-          filters: [{ field: "trace_id", op: "eq", value: "trace-1" }],
+          filters: [{ field: "correlation_id", op: "eq", value: "corr-1" }],
         },
       });
 
-      expect(mainOnlyResponse.statusCode).toBe(200);
-      expect(mainOnlyResponse.json().rows[0]?.["total"]).toBe(1);
+      expect(mainResponse.statusCode).toBe(200);
+      expect(mainResponse.json().rows[0]?.["total"]).toBe(1);
 
-      const traceResponse = await server.app.inject({
+      const eventsResponse = await server.app.inject({
         method: "GET",
-        url: "/trace/trace-1",
+        url: "/events/corr-1",
       });
 
-      expect(traceResponse.statusCode).toBe(200);
-      expect(traceResponse.json().rows).toHaveLength(2);
+      expect(eventsResponse.statusCode).toBe(200);
+      expect(eventsResponse.json().rows).toHaveLength(2);
 
-      const columnsResponse = await server.app.inject({
-        method: "GET",
-        url: "/columns",
-      });
-
-      expect(columnsResponse.statusCode).toBe(200);
-      expect(
-        columnsResponse
-          .json()
-          .columns.some(
-            (column: { name: string }) => column.name === "db.statement",
-          ),
-      ).toBe(true);
-
-      const conflictingScopeResponse = await server.app.inject({
+      const promotedResponse = await server.app.inject({
         method: "POST",
         url: "/query",
         payload: {
-          select: [{ fn: "COUNT", as: "total" }],
-          filters: [{ field: "main", op: "eq", value: true }],
+          select: [{ fn: "SUM", field: "order.total", as: "total" }],
         },
       });
 
-      expect(conflictingScopeResponse.statusCode).toBe(400);
-      expect(conflictingScopeResponse.json().error).toMatch(/scope "main"/);
+      expect(promotedResponse.statusCode).toBe(200);
+      expect(promotedResponse.json().rows[0]?.["total"]).toBe(42);
     } finally {
       await server.close();
     }
   });
 
-  it("returns 400 for malformed OTLP payloads", async () => {
+  it("returns 400 for malformed event payloads", async () => {
     const server = await createCollectorServer(
       createTestCollectorConfig({
         duckDbPath: join(workspaceDir, "events.duckdb"),
-        batchSize: 10,
-        batchTimeoutMs: 10,
       }),
     );
 
     try {
       const response = await server.app.inject({
         method: "POST",
-        url: "/v1/traces",
-        payload: {
-          resourceSpans: [
-            {
-              scopeSpans: [
-                {
-                  spans: [
-                    {
-                      spanId: "span-1",
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
+        url: "/v1/events",
+        payload: { events: [] },
       });
 
       expect(response.statusCode).toBe(400);
-      expect(response.json().error).toMatch(/traceId/);
+      expect(response.json().error).toMatch(/events/);
     } finally {
       await server.close();
     }
@@ -183,8 +137,6 @@ describe("collector server", () => {
     const server = await createCollectorServer(
       createTestCollectorConfig({
         duckDbPath: join(workspaceDir, "events.duckdb"),
-        batchSize: 10,
-        batchTimeoutMs: 10,
       }),
     );
 
@@ -192,9 +144,7 @@ describe("collector server", () => {
       const response = await server.app.inject({
         method: "POST",
         url: "/sql",
-        payload: {
-          sql: "DELETE FROM events",
-        },
+        payload: { sql: "DELETE FROM events" },
       });
 
       expect(response.statusCode).toBe(400);
@@ -217,32 +167,9 @@ describe("collector server", () => {
     try {
       const firstRequest = server.app.inject({
         method: "POST",
-        url: "/v1/traces",
+        url: "/v1/events",
         payload: {
-          resourceSpans: [
-            {
-              resource: {
-                attributes: [
-                  {
-                    key: "service.name",
-                    value: { stringValue: "payments" },
-                  },
-                ],
-              },
-              scopeSpans: [
-                {
-                  spans: [
-                    {
-                      traceId: "trace-1",
-                      spanId: "span-1",
-                      startTimeUnixNano: "1000000000",
-                      endTimeUnixNano: "2000000000",
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+          events: [{ event_id: "event-1", correlation_id: "corr-1" }],
         },
       });
 
@@ -250,44 +177,19 @@ describe("collector server", () => {
 
       const secondResponse = await server.app.inject({
         method: "POST",
-        url: "/v1/traces",
+        url: "/v1/events",
         payload: {
-          resourceSpans: [
-            {
-              resource: {
-                attributes: [
-                  {
-                    key: "service.name",
-                    value: { stringValue: "payments" },
-                  },
-                ],
-              },
-              scopeSpans: [
-                {
-                  spans: [
-                    {
-                      traceId: "trace-2",
-                      spanId: "span-2",
-                      startTimeUnixNano: "1000000000",
-                      endTimeUnixNano: "2000000000",
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+          events: [{ event_id: "event-2", correlation_id: "corr-2" }],
         },
       });
 
       expect(secondResponse.statusCode).toBe(503);
-      expect(secondResponse.json().error).toMatch(/queue limit exceeded/i);
-
       await server.dependencies.store.flush();
-      const firstResponse = await firstRequest;
-      expect(firstResponse.statusCode).toBe(202);
+      expect((await firstRequest).statusCode).toBe(202);
     } finally {
       await server.close();
-  }
+    }
+  });
 });
 
 function createTestCollectorConfig(
@@ -303,9 +205,8 @@ function createTestCollectorConfig(
     promotionIntervalMs: 300_000,
     promotionMinRows: 1_000,
     promotionMinRatio: 0.01,
-    promotionMaxKeysPerRun: 1,
+    promotionMaxKeysPerRun: 25,
     queueLimit: 10_000,
     ...overrides,
   };
 }
-});

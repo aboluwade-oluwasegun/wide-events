@@ -11,7 +11,7 @@ describe("compileStructuredQuery", () => {
     expect(compiled.params).toEqual([true]);
   });
 
-  it("omits the main filter for all-span queries", () => {
+  it("omits the main filter for all-event queries", () => {
     const compiled = compileStructuredQuery({
       select: [{ fn: "COUNT", as: "total" }],
       scope: "all"

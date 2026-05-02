@@ -42,6 +42,25 @@ describe("WideEventsClient", () => {
     await expect(client.sql("DELETE FROM events")).rejects.toThrow(/read-only/);
   });
 
+  it("fetches events by correlation id", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ correlationId: "corr-1", rows: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    const client = new WideEventsClient({
+      url: "http://collector.test",
+      fetchImpl
+    });
+
+    await expect(client.getEvents("corr-1")).resolves.toEqual({
+      correlationId: "corr-1",
+      rows: []
+    });
+    expect(fetchImpl).toHaveBeenCalledWith("http://collector.test/events/corr-1");
+  });
+
   it("surfaces plain-text collector errors", async () => {
     const client = new WideEventsClient({
       url: "http://collector.test",

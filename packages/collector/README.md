@@ -1,12 +1,6 @@
 # @wide-events/collector
 
-Collector service and CLI for ingesting OTLP traces and querying DuckDB-backed wide events.
-
-## Install
-
-```bash
-npm install @wide-events/collector
-```
+Collector service and CLI for ingesting native wide events and querying DuckDB-backed observability data.
 
 ## Run
 
@@ -14,142 +8,84 @@ npm install @wide-events/collector
 WIDE_EVENTS_DUCKDB_PATH=./wide-events.db npx wide-events-collector
 ```
 
-The collector listens on `http://localhost:4318` by default.
+## Ingest
 
-## Environment
+### `POST /v1/events`
 
-| Variable | Required | Default | Description |
-| --- | --- | --- | --- |
-| `WIDE_EVENTS_DUCKDB_PATH` | yes | none | Path to the DuckDB database file. |
-| `WIDE_EVENTS_COLLECTOR_PORT` | no | `4318` | HTTP listen port. |
-| `WIDE_EVENTS_BATCH_SIZE` | no | `100` | Max rows per write batch. |
-| `WIDE_EVENTS_BATCH_TIMEOUT_MS` | no | `1000` | Flush interval for partial batches. |
-| `WIDE_EVENTS_RETENTION_DAYS` | no | `30` | Retention cutoff in days. |
-| `WIDE_EVENTS_MAX_PROMOTED_COLUMNS` | no | `200` | Maximum number of promoted dynamic columns. |
-| `WIDE_EVENTS_PROMOTION_INTERVAL_MS` | no | `300000` | How often the promotion scheduler evaluates candidates. |
-| `WIDE_EVENTS_PROMOTION_MIN_ROWS` | no | `1000` | Minimum non-null rows before a key can be promoted. |
-| `WIDE_EVENTS_PROMOTION_MIN_RATIO` | no | `0.01` | Minimum retained-row ratio before a key can be promoted. |
-| `WIDE_EVENTS_PROMOTION_MAX_KEYS_PER_RUN` | no | `1` | Maximum keys promoted in one scheduler cycle. |
-| `WIDE_EVENTS_QUEUE_LIMIT` | no | `10000` | Maximum number of queued rows before ingest is rejected. |
-
-## HTTP API
-
-### `GET /health`
-
-Returns a simple health payload for container orchestration and smoke checks.
-
-### `POST /v1/traces`
-
-Accepts OTLP over HTTP JSON. v0.1 does not support OTLP protobuf or gRPC.
-
-The collector stores one row per span:
-
-- resource attributes
-- span attributes
-- timing fields
-- trace linkage fields
-
-If the SDK sends `main=true`, the collector trusts that value. If it is missing, the collector only falls back to inferring `main=true` for server-root spans without a parent.
-
-Successful responses keep the existing ingest response shape. Invalid payloads return `400`. Queue saturation returns `503`.
-
-### `POST /query`
-
-Executes the structured query DSL and returns:
+Accepts native structured event JSON:
 
 ```json
 {
-  "rows": []
-}
-```
-
-Example:
-
-```json
-{
-  "select": [
-    { "fn": "COUNT", "as": "requests" },
-    { "fn": "P95", "field": "duration_ms", "as": "p95_duration_ms" }
-  ],
-  "filters": [
-    { "field": "service.name", "op": "eq", "value": "api" }
-  ],
-  "groupBy": ["http.route"],
-  "orderBy": { "field": "requests", "dir": "desc" },
-  "limit": 20
-}
-```
-
-`scope` defaults to `"main"`. In that mode the collector injects `main = true`. Set `scope: "all"` to query all stored spans. Structured queries only target baseline and promoted columns; overflow-only keys should be queried through `/sql`. If you explicitly filter on `main` while also using `scope: "main"`, the request is rejected with `400`.
-
-### `POST /sql`
-
-Executes raw SQL against DuckDB and returns:
-
-```json
-{
-  "rows": []
-}
-```
-
-The SQL surface is read-only in v0.1.
-
-### `GET /columns`
-
-Returns schema metadata:
-
-```json
-{
-  "columns": [
-    { "name": "service.name", "type": "VARCHAR", "origin": "baseline" }
+  "events": [
+    {
+      "event_id": "event-1",
+      "correlation_id": "corr-1",
+      "ts": "2026-05-02T00:00:00.000Z",
+      "duration_ms": 42,
+      "main": true,
+      "sample_rate": 1,
+      "service.name": "orders-api",
+      "http.route": "/orders",
+      "http.status_code": 201,
+      "attributes": {
+        "order.total": 99.5,
+        "db.queries": [{ "operation": "select_order", "duration_ms": 12 }]
+      },
+      "promote": ["order.total"]
+    }
   ]
 }
 ```
 
-Columns now include storage and promotion metadata such as `storageState`, `queryable`, `inferredType`, `promotedType`, `seenRows`, and `lastSeenAt`.
+Known baseline fields are stored as typed columns. Unknown fields and `attributes` entries land in `attributes_overflow`. Primitive fields listed in `promote` are promoted into typed columns.
 
-### `GET /trace/:id`
+## Query
 
-Returns all stored rows for a trace in timestamp order:
+### `POST /query`
+
+Structured queries target baseline and promoted columns:
 
 ```json
 {
-  "traceId": "abc123",
-  "rows": []
+  "select": [{ "fn": "P95", "field": "duration_ms", "as": "p95_ms" }],
+  "filters": [{ "field": "service.name", "op": "eq", "value": "orders-api" }],
+  "groupBy": ["http.route"]
 }
 ```
 
-## Storage behavior
+`scope` defaults to `"main"`, which applies `main = true`. Set `scope: "all"` to query all stored events.
 
-- All spans are stored, not only `main=true` rows.
-- Structured queries default to `main=true` semantics unless `scope: "all"` is requested.
-- New attributes land in `attributes_overflow MAP(VARCHAR, JSON)` first.
-- SDKs can attach explicit promotion hints for primitive custom attributes. The collector consumes those hints internally and promotes the key before inserting the first hinted row.
-- Stable scalar keys can later be promoted into typed DuckDB columns by the background scheduler.
-- Explicit promotion hints are a fast path for eager promotion. The background scheduler still handles unhinted overflow keys.
-- Promoted keys are backfilled into their typed column and future ingest becomes column-only for that key.
-- Hint metadata is not persisted in `attributes_overflow` and is not queryable as event data.
-- Retention deletes old rows on a daily schedule and runs through the same serialized write path as inserts and schema changes.
+### `POST /sql`
 
-## Logging
+Runs read-only SQL for advanced inspection, including overflow JSON:
 
-The collector emits warnings and info around the operational edges that matter:
-
-- queue saturation
-- promotion failures
-- retention start, finish, and failure
-
-## Docker
-
-Build locally from the repository root:
-
-```bash
-docker build -f packages/collector/Dockerfile -t wide-events-collector:local .
+```sql
+SELECT map_extract_value(attributes_overflow, 'db.queries') FROM events;
 ```
 
-The release workflow publishes to `docker.io/$DOCKERHUB_USERNAME/wide-events-collector`.
+### `GET /events/:correlationId`
 
+Returns all events for a correlation id in timestamp order.
 
-## Security posture
+### `GET /columns`
 
-The collector has no built-in authentication in v0.1. Keep it behind a trusted network boundary, especially if `/sql` is exposed.
+Lists baseline, overflow-only, promoted, and failed columns.
+
+## Configuration
+
+Required:
+
+- `WIDE_EVENTS_DUCKDB_PATH`
+
+Optional:
+
+- `WIDE_EVENTS_COLLECTOR_PORT`: default `4318`
+- `WIDE_EVENTS_BATCH_SIZE`: default `100`
+- `WIDE_EVENTS_BATCH_TIMEOUT_MS`: default `1000`
+- `WIDE_EVENTS_RETENTION_DAYS`: default `30`
+- `WIDE_EVENTS_MAX_PROMOTED_COLUMNS`: default `200`
+- `WIDE_EVENTS_PROMOTION_INTERVAL_MS`: default `300000`
+- `WIDE_EVENTS_PROMOTION_MIN_ROWS`: default `1000`
+- `WIDE_EVENTS_PROMOTION_MIN_RATIO`: default `0.01`
+- `WIDE_EVENTS_PROMOTION_MAX_KEYS_PER_RUN`: default `25`
+- `WIDE_EVENTS_QUEUE_LIMIT`: default `10000`

@@ -2,7 +2,7 @@ import type {
   ColumnInfo,
   QueryResult,
   StructuredQuery,
-  TraceResult
+  EventsResult
 } from "@wide-events/internal";
 
 export interface WideEventsClientOptions {
@@ -36,8 +36,8 @@ export class WideEventsClient {
     return response.columns;
   }
 
-  async getTrace(traceId: string): Promise<TraceResult> {
-    return await this.getJson<TraceResult>(`/trace/${encodeURIComponent(traceId)}`);
+  async getEvents(correlationId: string): Promise<EventsResult> {
+    return await this.getJson<EventsResult>(`/events/${encodeURIComponent(correlationId)}`);
   }
 
   private async getJson<TResponse>(path: string): Promise<TResponse> {

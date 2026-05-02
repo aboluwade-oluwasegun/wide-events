@@ -5,7 +5,7 @@ import {
   type ColumnInfo,
   type DynamicEventAttributes,
   type EventValue,
-  type FlatEventRow,
+  type StoredEventRow,
   type InferredAttributeType,
   type PromotionStorageState
 } from "@wide-events/internal";
@@ -136,7 +136,7 @@ export class AttributeCatalog {
 
   async recordRows(
     database: DuckDbDatabase,
-    rows: readonly FlatEventRow[]
+    rows: readonly StoredEventRow[]
   ): Promise<void> {
     const now = new Date().toISOString();
     const updates = new Map<string, AttributeCatalogEntry>();

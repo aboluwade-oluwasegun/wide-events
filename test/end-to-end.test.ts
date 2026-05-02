@@ -18,13 +18,11 @@ import { handleWorkerRequest } from "../examples/worker/src/worker";
 import { WideEventsClient } from "../packages/client/src/index";
 import type { CollectorConfig } from "../packages/collector/src/config";
 import { createCollectorServer } from "../packages/collector/src/server";
-import { resetNodeRuntimeRegistryForTests } from "../packages/sdk/src/node/runtime-registry";
 
 describe("wide-events live HTTP", () => {
   let workspaceDir = "";
 
   afterEach(async () => {
-    await resetNodeRuntimeRegistryForTests();
     if (workspaceDir) {
       await rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";
@@ -32,7 +30,6 @@ describe("wide-events live HTTP", () => {
   });
 
   it("ingests node, lambda, and worker telemetry over HTTP and serves queries through the client", async () => {
-    await resetNodeRuntimeRegistryForTests();
     workspaceDir = await mkdtemp(join(tmpdir(), "wide-events-e2e-"));
     const collectorPort = await getAvailablePort();
     const collector = await createCollectorServer(
@@ -117,13 +114,7 @@ describe("wide-events live HTTP", () => {
 
       const executionContext = createExecutionContext();
       const workerResponse = await handleWorkerRequest(
-        new Request("http://example.test/worker", {
-          method: "POST",
-          headers: {
-            traceparent:
-              "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
-          },
-        }),
+        new Request("http://example.test/worker", { method: "POST" }),
         {
           WIDE_EVENTS_COLLECTOR_URL: collectorUrl,
           WIDE_EVENTS_ENVIRONMENT: "test",

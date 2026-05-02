@@ -1,118 +1,127 @@
-import type { EventPrimitive } from "@wide-events/internal";
+import type { WideEvent } from "@wide-events/internal";
 import {
-  buildAnnotatedAttributes,
-  toOtlpAttributes,
-  type AnnotateOptions,
-  type AnnotationAttributes
-} from "../shared/attributes";
-import { postJson } from "../shared/http";
-import { createSpanId, createTraceId } from "../shared/ids";
+  CoreWideEvents,
+  type ContextStorage,
+  type RecordErrorOptions,
+  type WideEventContext,
+  type WideEventSink,
+} from "../shared/core";
 import {
   edgeOptionsSchema,
   type EdgeWideEventsOptions,
-  type ResolvedEdgeWideEventsOptions
+  type ResolvedEdgeWideEventsOptions,
 } from "../shared/options";
-import { formatTraceparent, parseTraceparent } from "../shared/traceparent";
 
-export class WideEvents {
-  readonly options: ResolvedEdgeWideEventsOptions;
-  private flushed = false;
-  private readonly shouldExport: boolean;
-  private readonly spanId: string;
-  private traceId: string;
-  private readonly startedAt = Date.now();
-  private parentSpanId: string | null = null;
-  private readonly attributes = new Map<string, EventPrimitive>();
+interface ExecutionContextLike {
+  waitUntil(promise: Promise<unknown>): void;
+}
 
-  constructor(options: EdgeWideEventsOptions) {
-    this.options = edgeOptionsSchema.parse(options);
-    this.shouldExport =
-      !this.options.disabled &&
-      (this.options.sampleRate <= 1 || Math.random() < 1 / this.options.sampleRate);
-    this.spanId = createSpanId();
-    this.traceId = createTraceId();
-    this.attributes.set("sample_rate", this.options.sampleRate);
-    this.attributes.set("service.name", this.options.serviceName);
-    this.attributes.set("service.environment", this.options.environment);
+class SingleContextStorage implements ContextStorage {
+  private context: WideEventContext | undefined;
+
+  getStore(): WideEventContext | undefined {
+    return this.context;
   }
 
-  annotate<T extends AnnotationAttributes>(
-    attributes: T,
-    options?: AnnotateOptions<T>
-  ): void {
-    if (this.options.disabled) {
-      return;
-    }
-
-    for (const [key, value] of Object.entries(buildAnnotatedAttributes(attributes, options))) {
-      if (
-        value === null ||
-        typeof value === "string" ||
-        typeof value === "number" ||
-        typeof value === "boolean"
-      ) {
-        this.attributes.set(key, value);
-      }
-    }
+  run<T>(context: WideEventContext, callback: () => T): T {
+    this.context = context;
+    return callback();
   }
 
-  setParentContext(traceparent: string): void {
-    const parsed = parseTraceparent(traceparent);
-    if (!parsed) {
-      return;
-    }
-
-    this.parentSpanId = parsed.parentSpanId;
-    this.traceId = parsed.traceId;
-  }
-
-  getTraceparent(): string {
-    return formatTraceparent(this.traceId, this.spanId);
-  }
-
-  async flush(fetchImpl: typeof fetch = fetch): Promise<void> {
-    if (this.options.disabled || this.flushed || !this.shouldExport) {
-      this.flushed = true;
-      return;
-    }
-
-    const now = Date.now();
-    const body = {
-      resourceSpans: [
-        {
-          resource: {
-            attributes: toOtlpAttributes({
-              "service.name": this.options.serviceName,
-              "service.environment": this.options.environment
-            })
-          },
-          scopeSpans: [
-            {
-              spans: [
-                {
-                  traceId: this.traceId,
-                  spanId: this.spanId,
-                  parentSpanId: this.parentSpanId ?? undefined,
-                  startTimeUnixNano: String(BigInt(this.startedAt) * 1_000_000n),
-                  endTimeUnixNano: String(BigInt(now) * 1_000_000n),
-                  attributes: toOtlpAttributes(
-                    Object.fromEntries(this.attributes.entries())
-                  )
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    };
-
-    await postJson(
-      fetchImpl,
-      `${this.options.collectorUrl.replace(/\/$/u, "")}/v1/traces`,
-      body
-    );
-    this.flushed = true;
+  clear(): void {
+    this.context = undefined;
   }
 }
 
-export type { EdgeWideEventsOptions } from "../shared/options";
+export class WideEvents {
+  readonly options: ResolvedEdgeWideEventsOptions;
+  private readonly storage = new SingleContextStorage();
+  private readonly core: CoreWideEvents;
+
+  constructor(options: EdgeWideEventsOptions) {
+    this.options = {
+      ...edgeOptionsSchema.parse(options),
+      fetchImpl: options.fetchImpl,
+      sink: options.sink,
+    };
+    this.core = new CoreWideEvents(this.options, this.storage);
+
+    if (this.options.autoInstrument.fetch) {
+      this.core.instrumentFetch();
+    }
+  }
+
+  run<T>(initial: Partial<WideEvent>, callback: () => T): T {
+    return this.core.run(initial, callback);
+  }
+
+  current(): WideEvent | undefined {
+    return this.core.current();
+  }
+
+  annotate: CoreWideEvents["annotate"] = (...args) => this.core.annotate(...args);
+  push: CoreWideEvents["push"] = (...args) => this.core.push(...args);
+  recordError: CoreWideEvents["recordError"] = (...args) => this.core.recordError(...args);
+  wrapFetch: CoreWideEvents["wrapFetch"] = (...args) => this.core.wrapFetch(...args);
+  instrumentFetch(): void {
+    this.core.instrumentFetch();
+  }
+  restoreFetch(): void {
+    this.core.restoreFetch();
+  }
+
+  fetchHandler(
+    request: Request,
+    executionContext: ExecutionContextLike,
+    handler: (request: Request) => Promise<Response> | Response,
+  ): Promise<Response> {
+    const started = Date.now();
+    return this.core.run(createRequestEvent(request), async () => {
+      try {
+        const response = await handler(request);
+        this.core.finishCurrent({
+          "http.status_code": response.status,
+          duration_ms: Date.now() - started,
+          error: response.status >= 500 ? true : null,
+          "exception.slug": response.status >= 500 ? `http_${response.status}` : null,
+        });
+        executionContext.waitUntil(this.core.flush());
+        return response;
+      } catch (error) {
+        this.core.recordError(error, { handled: false });
+        this.core.finishCurrent({ duration_ms: Date.now() - started });
+        executionContext.waitUntil(this.core.flush());
+        throw error;
+      } finally {
+        this.storage.clear();
+      }
+    });
+  }
+
+  async flush(): Promise<void> {
+    this.core.finishCurrent();
+    await this.core.flush();
+    this.storage.clear();
+  }
+
+  async shutdown(): Promise<void> {
+    this.core.restoreFetch();
+    await this.core.shutdown();
+  }
+}
+
+export function createWideEvents(options: EdgeWideEventsOptions): WideEvents {
+  return new WideEvents(options);
+}
+
+function createRequestEvent(request: Request): Partial<WideEvent> {
+  const url = new URL(request.url);
+  return {
+    type: "request",
+    name: `${request.method} ${url.pathname}`,
+    "http.request.method": request.method,
+    "http.route": url.pathname,
+  };
+}
+
+export type { EdgeWideEventsOptions, WideEventSink, RecordErrorOptions };

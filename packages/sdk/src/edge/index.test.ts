@@ -1,187 +1,74 @@
 import { describe, expect, it, vi } from "vitest";
 import { WideEvents } from "./index";
 
-describe("edge WideEvents", () => {
-  it("does not export when disabled", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
-    const wideEvents = new WideEvents({
-      serviceName: "edge-service",
+describe("WideEvents edge SDK", () => {
+  it("exports request events through waitUntil", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const wide = new WideEvents({
+      serviceName: "worker",
       collectorUrl: "http://collector.test",
-      environment: "test",
-      disabled: true
+      fetchImpl,
+      batchSize: 1,
     });
+    const promises: Promise<unknown>[] = [];
 
-    await wideEvents.flush(fetchImpl);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("skips unsampled exports deterministically", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0.99);
-    const fetchImpl = vi.fn<typeof fetch>();
-    const wideEvents = new WideEvents({
-      serviceName: "edge-service",
-      collectorUrl: "http://collector.test",
-      environment: "test",
-      sampleRate: 10
-    });
-
-    await wideEvents.flush(fetchImpl);
-    await wideEvents.flush(fetchImpl);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("exports a single OTLP span with propagated trace context", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(null, { status: 202 })
-    );
-    const wideEvents = new WideEvents({
-      serviceName: "edge-service",
-      collectorUrl: "http://collector.test",
-      environment: "test"
-    });
-
-    wideEvents.setParentContext(
-      "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
-    );
-    wideEvents.annotate({
-      main: true,
-      "http.route": "/edge"
-    });
-    await wideEvents.flush(fetchImpl);
-
-    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as {
-      resourceSpans: Array<{
-        scopeSpans: Array<{
-          spans: Array<{
-            traceId: string;
-            parentSpanId?: string;
-            attributes: Array<{ key: string }>;
-          }>;
-        }>;
-      }>;
-    };
-
-    const span = body.resourceSpans[0]?.scopeSpans[0]?.spans[0];
-    expect(span?.traceId).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    expect(span?.parentSpanId).toBe("bbbbbbbbbbbbbbbb");
-    expect(span?.attributes.some((attribute) => attribute.key === "http.route")).toBe(
-      true
-    );
-  });
-
-  it("emits internal promotion hints alongside annotated attributes", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(null, { status: 202 })
-    );
-    const wideEvents = new WideEvents({
-      serviceName: "edge-service",
-      collectorUrl: "http://collector.test",
-      environment: "test"
-    });
-
-    wideEvents.annotate(
+    const response = await wide.fetchHandler(
+      new Request("http://example.test/worker", { method: "POST" }),
       {
-        "custom.value": "alpha"
+        waitUntil(promise) {
+          promises.push(promise);
+        },
       },
-      { promote: ["custom.value"] }
+      () => new Response("ok", { status: 201 }),
     );
-    await wideEvents.flush(fetchImpl);
 
-    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as {
-      resourceSpans: Array<{
-        scopeSpans: Array<{
-          spans: Array<{
-            attributes: Array<{ key: string; value: Record<string, unknown> }>;
-          }>;
-        }>;
-      }>;
-    };
-    const attributes = body.resourceSpans[0]?.scopeSpans[0]?.spans[0]?.attributes ?? [];
-    expect(attributes).toContainEqual({
-      key: "wide_events.promote.custom.value",
-      value: { boolValue: true }
-    });
+    expect(response.status).toBe(201);
+    await Promise.all(promises);
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(body.events[0]).toEqual(
+      expect.objectContaining({
+        "service.name": "worker",
+        "http.route": "/worker",
+        "http.request.method": "POST",
+        "http.status_code": 201,
+      }),
+    );
   });
 
-  it("throws for invalid promotion hints", () => {
-    const wideEvents = new WideEvents({
-      serviceName: "edge-service",
+  it("records thrown handler errors", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const wide = new WideEvents({
+      serviceName: "worker",
       collectorUrl: "http://collector.test",
-      environment: "test"
+      fetchImpl,
+      batchSize: 1,
     });
+    const promises: Promise<unknown>[] = [];
 
-    expect(() => {
-      wideEvents.annotate(
+    await expect(
+      wide.fetchHandler(
+        new Request("http://example.test/worker"),
         {
-          "custom.value": "alpha"
+          waitUntil(promise) {
+            promises.push(promise);
+          },
         },
-        { promote: ["custom.missing" as "custom.value"] }
-      );
-    }).toThrow(/promote key "custom.missing" is missing/);
-
-    expect(() => {
-      wideEvents.annotate(
-        {
-          "user.id": "u_123"
+        () => {
+          throw new Error("edge failed");
         },
-        { promote: ["user.id"] }
-      );
-    }).toThrow(/cannot promote baseline column "user.id"/);
-  });
+      ),
+    ).rejects.toThrow("edge failed");
+    await Promise.all(promises);
 
-  it("ignores invalid traceparent values", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(null, { status: 202 })
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(body.events[0]).toEqual(
+      expect.objectContaining({
+        error: true,
+        attributes: expect.objectContaining({
+          "exception.message": "edge failed",
+        }),
+      }),
     );
-    const wideEvents = new WideEvents({
-      serviceName: "edge-service",
-      collectorUrl: "http://collector.test",
-      environment: "test"
-    });
-
-    wideEvents.setParentContext("not-a-traceparent");
-    await wideEvents.flush(fetchImpl);
-
-    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as {
-      resourceSpans: Array<{
-        scopeSpans: Array<{
-          spans: Array<{
-            parentSpanId?: string;
-          }>;
-        }>;
-      }>;
-    };
-
-    const span = body.resourceSpans[0]?.scopeSpans[0]?.spans[0];
-    expect(span?.parentSpanId).toBeUndefined();
-  });
-
-  it("exports at most once after a successful flush", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(null, { status: 202 })
-    );
-    const wideEvents = new WideEvents({
-      serviceName: "edge-service",
-      collectorUrl: "http://collector.test",
-      environment: "test"
-    });
-
-    await wideEvents.flush(fetchImpl);
-    await wideEvents.flush(fetchImpl);
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it("surfaces export failures", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response("collector exploded", { status: 500 })
-    );
-    const wideEvents = new WideEvents({
-      serviceName: "edge-service",
-      collectorUrl: "http://collector.test",
-      environment: "test"
-    });
-
-    await expect(wideEvents.flush(fetchImpl)).rejects.toThrow(/Telemetry export failed/);
   });
 });

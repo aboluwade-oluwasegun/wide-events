@@ -28,7 +28,7 @@ export function createOrdersQueryExample(
 
   return {
     async listCustomerOrders(customerId: string, monthPrefix: string) {
-      wideEvents.annotateActiveSpan({
+      wideEvents.annotate({
         "dynamodb.query_name": "listCustomerOrders",
       });
 

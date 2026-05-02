@@ -12,6 +12,7 @@
     "../../packages/internal/src/**/*.ts"
   ],
   "exclude": [
+    "../../packages/sdk/src/node/**/*.ts",
     "../../packages/sdk/src/**/*.test.ts",
     "../../packages/internal/src/**/*.test.ts"
   ]

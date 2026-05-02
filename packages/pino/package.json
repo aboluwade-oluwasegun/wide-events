@@ -1,6 +1,6 @@
 {
-  "name": "@wide-events/sdk",
-  "version": "0.2.0",
+  "name": "@wide-events/pino",
+  "version": "0.1.0",
   "type": "module",
   "license": "AGPL-3.0-only",
   "engines": {
@@ -14,18 +14,13 @@
   "bugs": {
     "url": "https://github.com/aboluwade-oluwasegun/wide-events/issues"
   },
-  "main": "./dist/node/index.js",
-  "types": "./dist/node/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/node/index.d.ts",
-      "import": "./dist/node/index.js",
-      "default": "./dist/node/index.js"
-    },
-    "./edge": {
-      "types": "./dist/edge/index.d.ts",
-      "import": "./dist/edge/index.js",
-      "default": "./dist/edge/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "publishConfig": {
@@ -41,8 +36,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
+  "peerDependencies": {
+    "pino": ">=10"
+  },
+  "devDependencies": {
+    "pino": "10.3.1"
+  },
   "dependencies": {
     "@wide-events/internal": "workspace:*",
-    "zod": "4.3.6"
+    "@wide-events/sdk": "workspace:*"
   }
 }
