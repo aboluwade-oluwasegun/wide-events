@@ -25,7 +25,16 @@
       "@wide-events/collector": ["packages/collector/src/index.ts"],
       "@wide-events/client": ["packages/client/src/index.ts"],
       "@wide-events/sdk": ["packages/sdk/src/node/index.ts"],
-      "@wide-events/sdk/edge": ["packages/sdk/src/edge/index.ts"]
+      "@wide-events/sdk/edge": ["packages/sdk/src/edge/index.ts"],
+      "@wide-events/sdk/instrumentation/aws-sdk-v3": [
+        "packages/sdk/src/node/instrumentation/aws-sdk-v3.ts"
+      ],
+      "@wide-events/sdk/instrumentation/ioredis": [
+        "packages/sdk/src/node/instrumentation/ioredis.ts"
+      ],
+      "@wide-events/sdk/instrumentation/pg": [
+        "packages/sdk/src/node/instrumentation/pg.ts"
+      ]
     }
   }
 }
