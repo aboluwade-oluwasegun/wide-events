@@ -2,7 +2,17 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "baseUrl": "../..",
-    "rootDir": "../.."
+    "rootDir": "../..",
+    "paths": {
+      "@wide-events/sdk/instrumentation/aws-sdk-v3": [
+        "packages/sdk/src/node/instrumentation/aws-sdk-v3.ts"
+      ],
+      "@wide-events/sdk/instrumentation/ioredis": [
+        "packages/sdk/src/node/instrumentation/ioredis.ts"
+      ],
+      "@wide-events/sdk/instrumentation/pg": ["packages/sdk/src/node/instrumentation/pg.ts"],
+      "@wide-events/sdk": ["packages/sdk/src/node/index.ts"]
+    }
   },
   "include": [
     "src/**/*.ts",

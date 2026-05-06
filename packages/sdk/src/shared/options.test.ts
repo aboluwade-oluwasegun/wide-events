@@ -1,67 +1,25 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveNodeOptions } from "./options";
 
 describe("resolveNodeOptions", () => {
-  const originalLambdaFunctionName = process.env["AWS_LAMBDA_FUNCTION_NAME"];
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-
-    if (originalLambdaFunctionName === undefined) {
-      delete process.env["AWS_LAMBDA_FUNCTION_NAME"];
-      return;
-    }
-
-    process.env["AWS_LAMBDA_FUNCTION_NAME"] = originalLambdaFunctionName;
-  });
-
-  it("defaults aws auto-instrumentation to false outside lambda", () => {
-    delete process.env["AWS_LAMBDA_FUNCTION_NAME"];
-
+  it("defaults to lightweight fetch instrumentation being disabled", () => {
     const options = resolveNodeOptions({
       serviceName: "payments",
-      collectorUrl: "http://collector.test"
+      collectorUrl: "http://collector.test",
     });
 
-    expect(options.autoInstrument.aws).toBe(false);
+    expect(options.autoInstrument.fetch).toBe(false);
   });
 
-  it("defaults aws auto-instrumentation to true in lambda", () => {
-    process.env["AWS_LAMBDA_FUNCTION_NAME"] = "example-handler";
-
-    const options = resolveNodeOptions({
-      serviceName: "payments",
-      collectorUrl: "http://collector.test"
-    });
-
-    expect(options.autoInstrument.aws).toBe(true);
-  });
-
-  it("lets explicit aws=false override the lambda default", () => {
-    process.env["AWS_LAMBDA_FUNCTION_NAME"] = "example-handler";
-
+  it("lets fetch instrumentation be enabled explicitly", () => {
     const options = resolveNodeOptions({
       serviceName: "payments",
       collectorUrl: "http://collector.test",
       autoInstrument: {
-        aws: false
-      }
+        fetch: true,
+      },
     });
 
-    expect(options.autoInstrument.aws).toBe(false);
-  });
-
-  it("lets explicit aws=true enable auto-instrumentation outside lambda", () => {
-    delete process.env["AWS_LAMBDA_FUNCTION_NAME"];
-
-    const options = resolveNodeOptions({
-      serviceName: "payments",
-      collectorUrl: "http://collector.test",
-      autoInstrument: {
-        aws: true
-      }
-    });
-
-    expect(options.autoInstrument.aws).toBe(true);
+    expect(options.autoInstrument.fetch).toBe(true);
   });
 });

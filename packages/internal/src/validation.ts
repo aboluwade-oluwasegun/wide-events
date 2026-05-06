@@ -9,6 +9,56 @@ export const eventPrimitiveSchema = z.union([
   z.null()
 ]);
 
+export type EventPrimitiveInput = z.input<typeof eventPrimitiveSchema>;
+
+export type EventValueInput =
+  | EventPrimitiveInput
+  | EventValueInput[]
+  | { [key: string]: EventValueInput };
+
+export const eventValueSchema: z.ZodType<EventValueInput> = z.lazy(() =>
+  z.union([
+    eventPrimitiveSchema,
+    z.array(eventValueSchema),
+    z.record(z.string(), eventValueSchema)
+  ])
+);
+
+export const eventAttributesSchema = z.record(z.string().min(1), eventValueSchema);
+
+export const wideEventSchema = z
+  .object({
+    event_id: z.string().min(1).optional(),
+    correlation_id: z.string().min(1).optional(),
+    parent_event_id: z.string().min(1).nullable().optional(),
+    ts: z.iso.datetime({ offset: true }).optional(),
+    duration_ms: z.number().nonnegative().nullable().optional(),
+    main: z.boolean().optional(),
+    sample_rate: z.number().int().positive().optional(),
+    name: z.string().min(1).optional(),
+    type: z.string().min(1).optional(),
+    "service.name": z.string().min(1).nullable().optional(),
+    "service.environment": z.string().min(1).nullable().optional(),
+    "service.version": z.string().min(1).nullable().optional(),
+    "http.route": z.string().min(1).nullable().optional(),
+    "http.status_code": z.number().int().nullable().optional(),
+    "http.request.method": z.string().min(1).nullable().optional(),
+    error: z.boolean().nullable().optional(),
+    "exception.slug": z.string().min(1).nullable().optional(),
+    "user.id": z.string().min(1).nullable().optional(),
+    "user.type": z.string().min(1).nullable().optional(),
+    "user.org.id": z.string().min(1).nullable().optional(),
+    attributes: eventAttributesSchema.optional(),
+    promote: z.array(z.string().min(1)).optional()
+  })
+  .catchall(eventValueSchema);
+
+export const wideEventBatchSchema = z
+  .object({
+    events: z.array(wideEventSchema).min(1)
+  })
+  .strict();
+
 const countSelectSchema = z
   .object({
     fn: z.literal("COUNT"),
@@ -81,8 +131,8 @@ export const sqlRequestSchema = z
   })
   .strict();
 
-export const traceParamsSchema = z
+export const eventsParamsSchema = z
   .object({
-    id: z.string().min(1)
+    correlationId: z.string().min(1)
   })
   .strict();

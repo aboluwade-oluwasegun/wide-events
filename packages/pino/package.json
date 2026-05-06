@@ -1,0 +1,49 @@
+{
+  "name": "@wide-events/pino",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aboluwade-oluwasegun/wide-events.git"
+  },
+  "homepage": "https://github.com/aboluwade-oluwasegun/wide-events#readme",
+  "bugs": {
+    "url": "https://github.com/aboluwade-oluwasegun/wide-events/issues"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json -f",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "peerDependencies": {
+    "pino": ">=10"
+  },
+  "devDependencies": {
+    "pino": "10.3.1"
+  },
+  "dependencies": {
+    "@wide-events/internal": "workspace:*",
+    "@wide-events/sdk": "workspace:*"
+  }
+}

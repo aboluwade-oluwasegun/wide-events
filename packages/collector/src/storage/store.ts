@@ -5,7 +5,7 @@ import {
   quoteIdentifier,
   sanitizeIdentifier,
   type EventPrimitive,
-  type FlatEventRow,
+  type StoredEventRow,
   type InferredAttributeType,
 } from "@wide-events/internal";
 import type { CollectorConfig } from "../config";
@@ -21,7 +21,7 @@ import type { SchemaRegistry } from "./schema-registry";
 import { SerializedExecutor } from "./serialized-executor";
 
 interface PendingBatch {
-  rows: FlatEventRow[];
+  rows: StoredEventRow[];
   resolve: () => void;
   reject: (error: unknown) => void;
 }
@@ -40,7 +40,7 @@ export class CollectorStore {
     private readonly logger: CollectorLogger = noopCollectorLogger,
   ) {}
 
-  async enqueueRows(rows: readonly FlatEventRow[]): Promise<void> {
+  async enqueueRows(rows: readonly StoredEventRow[]): Promise<void> {
     if (rows.length === 0) {
       return;
     }
@@ -235,7 +235,7 @@ async function ensureHintedPromotions(
   database: DuckDbDatabase,
   schema: SchemaRegistry,
   catalog: AttributeCatalog,
-  rows: readonly FlatEventRow[],
+  rows: readonly StoredEventRow[],
 ): Promise<void> {
   const hintedKeys = new Set<string>();
 
@@ -288,7 +288,7 @@ async function insertRows(
   database: DuckDbDatabase,
   schema: SchemaRegistry,
   catalog: AttributeCatalog,
-  rows: readonly FlatEventRow[],
+  rows: readonly StoredEventRow[],
 ): Promise<void> {
   if (rows.length === 0) {
     return;
@@ -321,7 +321,7 @@ async function insertRows(
       }
 
       if (BASELINE_COLUMN_NAMES.includes(column)) {
-        values.push(serializeRowValue(row[column as keyof FlatEventRow]));
+        values.push(serializeRowValue(row[column as keyof StoredEventRow]));
         continue;
       }
 
@@ -337,7 +337,7 @@ async function insertRows(
 }
 
 function collectInsertColumns(
-  rows: readonly FlatEventRow[],
+  rows: readonly StoredEventRow[],
   promotedColumns: Map<string, { column: string; type: string }>,
 ): string[] {
   const columnSet = new Set<string>(BASELINE_COLUMN_NAMES);
@@ -385,7 +385,7 @@ async function readTotalRetainedRows(
 }
 
 function buildOverflowAttributes(
-  row: FlatEventRow,
+  row: StoredEventRow,
   promotedColumns: Map<string, { column: string; type: string }>,
 ): Record<string, unknown> {
   let needsFiltering = false;
@@ -415,7 +415,7 @@ function buildOverflowAttributes(
 }
 
 function firstNonNullHintedValue(
-  rows: readonly FlatEventRow[],
+  rows: readonly StoredEventRow[],
   key: string,
 ): EventPrimitive | undefined {
   let sawKey = false;

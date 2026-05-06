@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { DynamicEventAttributes, FlatEventRow } from "@wide-events/internal";
+import type { DynamicEventAttributes, StoredEventRow } from "@wide-events/internal";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CollectorConfig } from "../config";
 import { QueueLimitExceededError } from "../errors";
@@ -21,11 +21,11 @@ function createRow(
   attributes: DynamicEventAttributes = {},
   ts: string = "2024-01-01T00:00:00.000Z",
   promotedAttributeHints: string[] = [],
-): FlatEventRow {
+): StoredEventRow {
   return {
-    trace_id: `trace-${suffix}`,
-    span_id: `span-${suffix}`,
-    parent_span_id: null,
+    correlation_id: `corr-${suffix}`,
+    event_id: `event-${suffix}`,
+    parent_event_id: null,
     ts,
     duration_ms: 10,
     main: true,
@@ -197,8 +197,8 @@ describe("CollectorStore", () => {
     expect(columns).toContain("custom.two");
 
     const rows = await database.executeRead(
-      "SELECT attributes_overflow FROM events WHERE trace_id = ?",
-      ["trace-one"],
+      "SELECT attributes_overflow FROM events WHERE correlation_id = ?",
+      ["corr-one"],
     );
     expect(rows[0]?.["attributes_overflow"]).toEqual({
       "custom.one": "alpha",
@@ -238,7 +238,7 @@ describe("CollectorStore", () => {
     ]);
 
     const rows = await database.executeRead(
-      'SELECT "shared.value" AS shared_value, attributes_overflow FROM events ORDER BY trace_id ASC',
+      'SELECT "shared.value" AS shared_value, attributes_overflow FROM events ORDER BY correlation_id ASC',
     );
     expect(rows).toHaveLength(2);
     expect(rows[0]?.["shared_value"]).toBe("left");
@@ -275,8 +275,8 @@ describe("CollectorStore", () => {
     ]);
 
     const rows = await database.executeRead(
-      'SELECT "custom.value" AS custom_value, attributes_overflow FROM events WHERE trace_id = ?',
-      ["trace-one"],
+      'SELECT "custom.value" AS custom_value, attributes_overflow FROM events WHERE correlation_id = ?',
+      ["corr-one"],
     );
     expect(rows[0]?.["custom_value"]).toBe("alpha");
     expect(rows[0]?.["attributes_overflow"]).toEqual({ "custom.other": "beta" });
@@ -312,7 +312,7 @@ describe("CollectorStore", () => {
     ]);
 
     const rows = await database.executeRead(
-      'SELECT "custom.value" AS custom_value, attributes_overflow FROM events ORDER BY trace_id ASC',
+      'SELECT "custom.value" AS custom_value, attributes_overflow FROM events ORDER BY correlation_id ASC',
     );
     expect(rows.map((row) => row["custom_value"])).toEqual(["alpha", "beta"]);
     expect(rows.map((row) => row["attributes_overflow"])).toEqual([{}, {}]);
@@ -360,7 +360,7 @@ describe("CollectorStore", () => {
     ]);
 
     const rows = await database.executeRead(
-      'SELECT "custom.name" AS custom_name, "custom.score" AS custom_score, attributes_overflow FROM events ORDER BY trace_id ASC',
+      'SELECT "custom.name" AS custom_name, "custom.score" AS custom_score, attributes_overflow FROM events ORDER BY correlation_id ASC',
     );
 
     expect(rows).toEqual([
@@ -400,8 +400,8 @@ describe("CollectorStore", () => {
     ]);
 
     const rows = await database.executeRead(
-      "SELECT attributes_overflow FROM events WHERE trace_id = ?",
-      ["trace-one"],
+      "SELECT attributes_overflow FROM events WHERE correlation_id = ?",
+      ["corr-one"],
     );
     expect(rows[0]?.["attributes_overflow"]).toEqual({
       "custom.alpha": "left",
@@ -517,9 +517,9 @@ describe("CollectorStore", () => {
     ]);
 
     const rows = await database.executeRead(
-      "SELECT trace_id FROM events ORDER BY trace_id ASC",
+      "SELECT correlation_id FROM events ORDER BY correlation_id ASC",
     );
-    expect(rows).toEqual([{ trace_id: "trace-new" }]);
+    expect(rows).toEqual([{ correlation_id: "corr-new" }]);
     expect(
       infos.some((entry) => entry.message === "collector retention started"),
     ).toBe(true);

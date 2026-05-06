@@ -1,1 +1,0 @@
-{"version":3,"file":"build-query.d.ts","sourceRoot":"","sources":["../../src/query/build-query.ts"],"names":[],"mappings":"AAAA,OAAO,EAIL,KAAK,cAAc,EAGnB,KAAK,eAAe,EACrB,MAAM,uBAAuB,CAAC;AAG/B,MAAM,WAAW,aAAa;IAC5B,GAAG,EAAE,MAAM,CAAC;IACZ,MAAM,EAAE,cAAc,EAAE,CAAC;CAC1B;AAMD,wBAAgB,sBAAsB,CAAC,KAAK,EAAE,eAAe,GAAG,aAAa,CAuE5E;AAED,wBAAgB,iBAAiB,CAAC,GAAG,EAAE,MAAM,GAAG,IAAI,CAKnD"}

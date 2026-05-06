@@ -4,10 +4,10 @@ function randomHex(length: number): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function createTraceId(): string {
+export function createCorrelationId(): string {
   return randomHex(32);
 }
 
-export function createSpanId(): string {
+export function createEventId(): string {
   return randomHex(16);
 }

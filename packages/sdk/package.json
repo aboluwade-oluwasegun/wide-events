@@ -26,10 +26,42 @@
       "types": "./dist/edge/index.d.ts",
       "import": "./dist/edge/index.js",
       "default": "./dist/edge/index.js"
+    },
+    "./instrumentation/pg": {
+      "types": "./dist/node/instrumentation/pg.d.ts",
+      "import": "./dist/node/instrumentation/pg.js",
+      "default": "./dist/node/instrumentation/pg.js"
+    },
+    "./instrumentation/aws-sdk-v3": {
+      "types": "./dist/node/instrumentation/aws-sdk-v3.d.ts",
+      "import": "./dist/node/instrumentation/aws-sdk-v3.js",
+      "default": "./dist/node/instrumentation/aws-sdk-v3.js"
+    },
+    "./instrumentation/ioredis": {
+      "types": "./dist/node/instrumentation/ioredis.d.ts",
+      "import": "./dist/node/instrumentation/ioredis.js",
+      "default": "./dist/node/instrumentation/ioredis.js"
     }
   },
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependencies": {
+    "ioredis": "^5",
+    "pg": "^8"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/pg": "^8.16.0",
+    "ioredis": "^5.9.2",
+    "pg": "^8.16.0"
   },
   "files": [
     "dist",
@@ -42,14 +74,6 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@opentelemetry/api": "1.9.0",
-    "@opentelemetry/auto-instrumentations-node": "0.71.0",
-    "@opentelemetry/context-async-hooks": "2.6.0",
-    "@opentelemetry/exporter-trace-otlp-http": "0.213.0",
-    "@opentelemetry/instrumentation": "0.213.0",
-    "@opentelemetry/instrumentation-aws-sdk": "0.68.0",
-    "@opentelemetry/resources": "2.6.0",
-    "@opentelemetry/sdk-trace-node": "2.6.0",
     "@wide-events/internal": "workspace:*",
     "zod": "4.3.6"
   }

@@ -42,10 +42,7 @@ export function createNodeServiceExample(
   const wideEvents = new WideEvents({
     serviceName: resolved.serviceName,
     environment: resolved.environment,
-    collectorUrl: resolved.collectorUrl,
-    autoInstrument: {
-      aws: true
-    }
+    collectorUrl: resolved.collectorUrl
   });
   const middleware = wideEvents.middleware();
   const server = createServer((request, response) => {
@@ -63,7 +60,6 @@ export function createNodeServiceExample(
       response,
       () => {
         wideEvents.annotate({
-          main: true,
           "http.route": request.url ?? "/"
         });
 

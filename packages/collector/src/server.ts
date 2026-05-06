@@ -7,8 +7,8 @@ import { registerColumnRoutes } from "./routes/columns";
 import { registerHealthRoute } from "./routes/health";
 import { registerQueryRoutes } from "./routes/query";
 import { registerSqlRoutes } from "./routes/sql";
-import { registerTraceQueryRoutes } from "./routes/trace";
-import { registerTraceRoutes } from "./routes/v1-traces";
+import { registerEventQueryRoutes } from "./routes/events";
+import { registerEventRoutes } from "./routes/v1-events";
 import { PromotionJob } from "./jobs/promotion";
 import { DuckDbDatabase } from "./storage/database";
 import { AttributeCatalog } from "./storage/attribute-catalog";
@@ -69,11 +69,11 @@ export async function createCollectorServer(
   };
 
   registerHealthRoute(app);
-  registerTraceRoutes(app, dependencies);
+  registerEventRoutes(app, dependencies);
   registerQueryRoutes(app, dependencies);
   registerSqlRoutes(app, dependencies);
   registerColumnRoutes(app, dependencies);
-  registerTraceQueryRoutes(app, dependencies);
+  registerEventQueryRoutes(app, dependencies);
 
   app.setErrorHandler((error, request, reply) => {
     const resolved = resolveCollectorError(error);

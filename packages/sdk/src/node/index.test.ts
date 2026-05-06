@@ -1,356 +1,224 @@
-import { context, trace, type Attributes, type HrTime, type Link, type Span, type SpanContext, type SpanStatus } from "@opentelemetry/api";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-node";
+import { EventEmitter } from "node:events";
+import type { Pool } from "pg";
+import type Redis from "ioredis";
+import { describe, expect, it, vi } from "vitest";
 import { WideEvents } from "./index";
-import {
-  getRuntimeRegistrySnapshotForTests,
-  resetNodeRuntimeRegistryForTests
-} from "./runtime-registry";
 
-describe("node WideEvents", () => {
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    delete process.env["AWS_LAMBDA_FUNCTION_NAME"];
-    await resetNodeRuntimeRegistryForTests();
-  });
+class FakeResponse extends EventEmitter {
+  statusCode = 200;
 
-  it("exports the annotated root span on forceFlush", async () => {
-    const exporter = new InMemorySpanExporter();
-
-    const wideEvents = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      traceExporter: exporter
-    });
-
-    const middleware = wideEvents.middleware();
-    await new Promise<void>((resolve) => {
-      const request = {
-        method: "GET",
-        url: "/checkout",
-        headers: {}
-      };
-
-      const listeners = new Map<string, () => void>();
-      const response = {
-        statusCode: 204,
-        once(event: "finish" | "close" | "error", listener: () => void) {
-          listeners.set(event, listener);
-          return this;
-        }
-      };
-
-      middleware(request, response, () => {
-        wideEvents.annotate({
-          "user.id": "user-123",
-          main: true
-        });
-        listeners.get("finish")?.();
-        resolve();
-      });
-    });
-
-    await wideEvents.forceFlush();
-
-    const spans = exporter.getFinishedSpans();
-    expect(spans).toHaveLength(1);
-    expect(spans[0]?.attributes["user.id"]).toBe("user-123");
-    expect(spans[0]?.attributes["http.route"]).toBe("/checkout");
-
-    await wideEvents.shutdown();
-  });
-
-  it("does nothing when annotate is called outside an active request context", async () => {
-    const exporter = new InMemorySpanExporter();
-    const wideEvents = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      traceExporter: exporter
-    });
-
-    wideEvents.annotate({
-      "user.id": "user-123"
-    });
-    await wideEvents.forceFlush();
-
-    expect(exporter.getFinishedSpans()).toHaveLength(0);
-    await wideEvents.shutdown();
-  });
-
-  it("annotates the active child span without changing the root span", async () => {
-    const activeSpan = new FakeSpan();
-    const wideEvents = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      traceExporter: new InMemorySpanExporter()
-    });
-
-    context.with(
-      trace.setSpan(context.active(), activeSpan),
-      () => {
-        wideEvents.annotateActiveSpan({
-          "dynamodb.query_name": "listCustomerOrders"
-        });
-      }
-    );
-
-    expect(activeSpan.attributes["dynamodb.query_name"]).toBe(
-      "listCustomerOrders"
-    );
-
-    await wideEvents.shutdown();
-  });
-
-  it("does nothing when annotateActiveSpan is called outside an active span", async () => {
-    const exporter = new InMemorySpanExporter();
-    const wideEvents = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      traceExporter: exporter
-    });
-
-    wideEvents.annotateActiveSpan({
-      "dynamodb.query_name": "listCustomerOrders"
-    });
-    await wideEvents.forceFlush();
-
-    expect(exporter.getFinishedSpans()).toHaveLength(0);
-    await wideEvents.shutdown();
-  });
-
-  it("adds internal promotion hint attributes to the exported span", async () => {
-    const exporter = new InMemorySpanExporter();
-    const wideEvents = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      traceExporter: exporter
-    });
-
-    const middleware = wideEvents.middleware();
-    await new Promise<void>((resolve) => {
-      const listeners = new Map<string, () => void>();
-      const response = {
-        statusCode: 204,
-        once(event: "finish" | "close" | "error", listener: () => void) {
-          listeners.set(event, listener);
-          return this;
-        }
-      };
-
-      middleware(
-        {
-          method: "GET",
-          url: "/checkout",
-          headers: {}
-        },
-        response,
-        () => {
-          wideEvents.annotate(
-            {
-              "custom.value": "alpha"
-            },
-            { promote: ["custom.value"] }
-          );
-          listeners.get("finish")?.();
-          resolve();
-        }
-      );
-    });
-
-    await wideEvents.forceFlush();
-
-    const span = exporter.getFinishedSpans()[0];
-    expect(span?.attributes["custom.value"]).toBe("alpha");
-    expect(span?.attributes["wide_events.promote.custom.value"]).toBe(true);
-
-    await wideEvents.shutdown();
-  });
-
-  it("throws for missing or baseline promotion keys", async () => {
-    const exporter = new InMemorySpanExporter();
-    const wideEvents = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      traceExporter: exporter
-    });
-
-    expect(() => {
-      wideEvents.annotate(
-        { "custom.value": "alpha" },
-        { promote: ["custom.missing" as "custom.value"] }
-      );
-    }).toThrow(/promote key "custom.missing" is missing/);
-
-    expect(() => {
-      wideEvents.annotate(
-        { "user.id": "u_123" },
-        { promote: ["user.id"] }
-      );
-    }).toThrow(/cannot promote baseline column "user.id"/);
-
-    await wideEvents.shutdown();
-  });
-
-  it("skips runtime registration and export when disabled", async () => {
-    process.env["AWS_LAMBDA_FUNCTION_NAME"] = "example-handler";
-    const exporter = new InMemorySpanExporter();
-    const wideEvents = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      disabled: true,
-      traceExporter: exporter
-    });
-
-    await wideEvents.forceFlush();
-    expect(getRuntimeRegistrySnapshotForTests()).toBeNull();
-    expect(exporter.getFinishedSpans()).toHaveLength(0);
-    await wideEvents.shutdown();
-    delete process.env["AWS_LAMBDA_FUNCTION_NAME"];
-  });
-
-  it("skips unsampled requests when sampleRate is greater than one", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0.99);
-    const exporter = new InMemorySpanExporter();
-    const wideEvents = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      sampleRate: 10,
-      traceExporter: exporter
-    });
-
-    const middleware = wideEvents.middleware();
-    const response = {
-      statusCode: 200,
-      once() {
-        return this;
-      }
-    };
-
-    middleware(
-      {
-        method: "GET",
-        url: "/checkout",
-        headers: {}
-      },
-      response,
-      () => {
-        wideEvents.annotate({
-          main: true
-        });
-      }
-    );
-
-    await wideEvents.forceFlush();
-    expect(exporter.getFinishedSpans()).toHaveLength(0);
-    await wideEvents.shutdown();
-  });
-
-  it("reuses the active runtime when options are identical", async () => {
-    const exporter = new InMemorySpanExporter();
-    const first = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      traceExporter: exporter
-    });
-
-    expect(getRuntimeRegistrySnapshotForTests()?.references).toBe(1);
-
-    const second = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      traceExporter: exporter
-    });
-
-    expect(getRuntimeRegistrySnapshotForTests()?.references).toBe(2);
-
-    await second.shutdown();
-    expect(getRuntimeRegistrySnapshotForTests()?.references).toBe(1);
-
-    await first.shutdown();
-    expect(getRuntimeRegistrySnapshotForTests()).toBeNull();
-  });
-
-  it("throws when a second runtime is created with different options", async () => {
-    const first = new WideEvents({
-      serviceName: "payments",
-      environment: "test",
-      collectorUrl: "http://collector.test",
-      traceExporter: new InMemorySpanExporter()
-    });
-
-    expect(() => {
-      return new WideEvents({
-        serviceName: "checkout",
-        environment: "test",
-        collectorUrl: "http://collector.test",
-        traceExporter: new InMemorySpanExporter()
-      });
-    }).toThrow(/active Node runtime/);
-
-    await first.shutdown();
-  });
-});
-
-class FakeSpan implements Span {
-  readonly attributes: Attributes = {};
-
-  addEvent(
-    _name: string,
-    _attributesOrStartTime?: Attributes | HrTime,
-    _startTime?: HrTime
-  ): this {
-    return this;
-  }
-
-  addLink(_link: Link): this {
-    return this;
-  }
-
-  addLinks(_links: Link[]): this {
-    return this;
-  }
-
-  end(): void {}
-
-  isRecording(): boolean {
-    return true;
-  }
-
-  recordException(_exception: string | Error, _time?: HrTime): void {}
-
-  setAttribute(key: string, value: string | number | boolean): this {
-    this.attributes[key] = value;
-    return this;
-  }
-
-  setAttributes(attributes: Attributes): this {
-    Object.assign(this.attributes, attributes);
-    return this;
-  }
-
-  setStatus(_status: SpanStatus): this {
-    return this;
-  }
-
-  spanContext(): SpanContext {
-    return {
-      traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      spanId: "bbbbbbbbbbbbbbbb",
-      traceFlags: 1
-    };
-  }
-
-  updateName(_name: string): this {
-    return this;
+  once(event: "finish", listener: () => void): this {
+    return super.once(event, listener);
   }
 }
+
+describe("WideEvents node SDK", () => {
+  it("exports a request event from middleware", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const wide = new WideEvents({
+      serviceName: "payments",
+      collectorUrl: "http://collector.test",
+      fetchImpl,
+      batchSize: 1,
+    });
+    const response = new FakeResponse();
+
+    wide.middleware()({ method: "GET", url: "/checkout" }, response, () => {
+      wide.annotate({ "user.id": "user-1" });
+    });
+    response.emit("finish");
+
+    await wide.forceFlush();
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://collector.test/v1/events",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(body.events[0]).toEqual(
+      expect.objectContaining({
+        "service.name": "payments",
+        "http.route": "/checkout",
+        "http.status_code": 200,
+        "user.id": "user-1",
+      }),
+    );
+  });
+
+  it("marks 500 responses as errors automatically", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const wide = new WideEvents({
+      serviceName: "payments",
+      collectorUrl: "http://collector.test",
+      fetchImpl,
+      batchSize: 1,
+    });
+    const response = new FakeResponse();
+    response.statusCode = 503;
+
+    wide.middleware()({ method: "GET", url: "/checkout" }, response, () => {});
+    response.emit("finish");
+    await wide.forceFlush();
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(body.events[0]).toEqual(
+      expect.objectContaining({
+        error: true,
+        "exception.slug": "http_503",
+      }),
+    );
+  });
+
+  it("records thrown lambda errors automatically", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const wide = new WideEvents({
+      serviceName: "lambda",
+      collectorUrl: "http://collector.test",
+      fetchImpl,
+      batchSize: 1,
+    });
+    const handler = wide.wrapHandler(async () => {
+      throw new Error("boom");
+    });
+
+    await expect(handler({}, {})).rejects.toThrow("boom");
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(body.events[0]).toEqual(
+      expect.objectContaining({
+        error: true,
+        "exception.slug": "Error",
+        attributes: expect.objectContaining({
+          "exception.message": "boom",
+          "exception.handled": false,
+        }),
+      }),
+    );
+  });
+
+  it("records fetch failures automatically", async () => {
+    const wide = new WideEvents({ serviceName: "payments" });
+    const wrapped = wide.wrapFetch(vi.fn<typeof fetch>().mockRejectedValue(new Error("offline")));
+
+    await wide.run({}, async () => {
+      await expect(wrapped("http://api.test/orders")).rejects.toThrow("offline");
+      expect(wide.current()?.attributes).toEqual(
+        expect.objectContaining({
+          "http.client.errors": [
+            expect.objectContaining({
+              host: "api.test",
+              error: "offline",
+            }),
+          ],
+          "exception.message": "offline",
+        }),
+      );
+    });
+  });
+
+  it("supports constructor-driven fetch instrumentation", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 200 }));
+    globalThis.fetch = fetchMock;
+
+    const wide = new WideEvents({ serviceName: "payments" }, { fetch: true });
+
+    try {
+      await wide.run({}, async () => {
+        await fetch("http://api.test/checkout", { method: "POST" });
+        expect(wide.current()?.attributes).toEqual(
+          expect.objectContaining({
+            "http.client.requests": [
+              expect.objectContaining({
+                host: "api.test",
+                path: "/checkout",
+                status_code: 200,
+              }),
+            ],
+          }),
+        );
+      });
+    } finally {
+      await wide.shutdown();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("supports constructor-driven pg instrumentation", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rowCount: 1 })),
+    } as unknown as Pool;
+
+    const wide = new WideEvents({ serviceName: "payments" }, { pg: [pool] });
+
+    await wide.run({}, async () => {
+      await pool.query("SELECT 1");
+      expect(wide.current()?.attributes).toEqual(
+        expect.objectContaining({
+          "db.queries": [
+            expect.objectContaining({
+              row_count: 1,
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it("supports constructor-driven redis instrumentation", async () => {
+    const redis = new EventEmitter() as unknown as Redis;
+    const wide = new WideEvents({ serviceName: "payments" }, { redis: [redis] });
+
+    await wide.run({}, async () => {
+      redis.emit("command", { commandId: "1", name: "get", args: ["session:1"] });
+      redis.emit("reply", { commandId: "1", name: "get", args: ["session:1"] });
+
+      expect(wide.current()?.attributes).toEqual(
+        expect.objectContaining({
+          "redis.commands": [
+            expect.objectContaining({
+              command: "GET",
+              key: "session:1",
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it("supports constructor-driven aws instrumentation", async () => {
+    let captured:
+      | ((next: (args: { input: unknown }) => Promise<{ output: unknown }>, context: { commandName: string }) => (args: { input: unknown }) => Promise<{ output: unknown }>)
+      | undefined;
+
+    const awsClient = {
+      config: { serviceId: "DynamoDB" },
+      middlewareStack: {
+        add: (middleware: typeof captured extends undefined ? never : NonNullable<typeof captured>) => {
+          captured = middleware;
+        },
+      },
+    };
+
+    const wide = new WideEvents({ serviceName: "payments" }, { aws: [awsClient] });
+
+    await wide.run({}, async () => {
+      await captured?.(
+        async () => ({ output: { ConsumedCapacity: { CapacityUnits: 2 } } }),
+        { commandName: "QueryCommand" },
+      )({ input: { TableName: "orders" } });
+
+      expect(wide.current()?.attributes).toEqual(
+        expect.objectContaining({
+          "aws.client.operations": [
+            expect.objectContaining({
+              operation: "QueryCommand",
+              service_id: "DynamoDB",
+              table: "orders",
+            }),
+          ],
+        }),
+      );
+    });
+  });
+});

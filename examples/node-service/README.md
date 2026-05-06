@@ -1,58 +1,47 @@
-# Node Example
+# Node service example
 
-Minimal Node HTTP server instrumented with `@wide-events/sdk`.
-
-The server opts in to AWS SDK tracing with `autoInstrument.aws: true`. The folder also includes [src/dynamodb-query.ts](/Users/proton/wide-events/examples/node-service/src/dynamodb-query.ts), which shows the recommended pattern for housed DynamoDB query functions:
-
-- keep query identity at the application layer with `dynamodb.query_name`
-- set that attribute with `wideEvents.annotateActiveSpan(...)` immediately before the AWS SDK call
-- let the AWS SDK instrumentation supply the DynamoDB operation span and timing data
-
-## Environment
-
-- `WIDE_EVENTS_COLLECTOR_URL`: default `http://localhost:4318`
-- `WIDE_EVENTS_ENVIRONMENT`: default `development`
-- `WIDE_EVENTS_SERVICE_NAME`: default `node-service`
-
-## Run
-
-From the repository root:
-
-```bash
-WIDE_EVENTS_DUCKDB_PATH=./.data/wide-events.db pnpm --filter @wide-events/collector exec node dist/cli.js
-```
-
-In another terminal:
+Minimal Node HTTP service instrumented with `@wide-events/sdk`.
 
 ```bash
 WIDE_EVENTS_COLLECTOR_URL=http://localhost:4318 pnpm --filter wide-events-example-node-service dev
 ```
 
-Then send a request:
+The example creates one main event per request, annotates `http.route`, and exports native JSON to `POST /v1/events`.
+
+## DynamoDB helper
+
+[`src/dynamodb-query.ts`](src/dynamodb-query.ts) shows the same ordering used by the constructor-based instrumentation API:
+
+1. Create a base `DynamoDBClient`.
+2. Instrument the base client (either directly or via `new WideEvents(coreOptions, { aws: [baseClient] })`).
+3. Build `DynamoDBDocumentClient.from(baseClient)` and reuse that client everywhere.
+
+Manual fields such as `"dynamodb.query_name"` are still appended with `wideEvents.annotate()` when you want app-level labels alongside auto-captured timings.
+
+## Optional Postgres and Redis snippets
+
+[`src/pg-health.ts`](src/pg-health.ts) and [`src/redis-health.ts`](src/redis-health.ts) are **opt-in**:
+
+- Postgres — set `DATABASE_URL` (omit it to skip the helper entirely).
+- Redis — set `REDIS_URL` (omit it to skip the helper entirely).
+
+Neither file is wired into [`src/server.ts`](src/server.ts) so the toy HTTP server stays dependency-light; copy the patterns where you compose `Pool`/`Redis` and pass them via:
+
+```ts
+new WideEvents(coreOptions, {
+  pg: [pool],
+  redis: [redis],
+});
+```
+
+[`docker-compose.yml`](docker-compose.yml) starts local Postgres (`wide`/`wide`) and Redis for manual testing:
 
 ```bash
-curl http://localhost:3000/
+docker compose -f examples/node-service/docker-compose.yml up -d
+export DATABASE_URL=postgres://wide:wide@127.0.0.1:5432/widetest
+export REDIS_URL=redis://127.0.0.1:6379
 ```
 
-The example emits a `main=true` service-root span with `http.route` and returns `{"ok":true}`.
+TypeScript maps `@wide-events/sdk/instrumentation/*` to workspace sources inside this example (`tsconfig.json` `paths`) so `pnpm typecheck` works before `packages/sdk/dist` exists.
 
-If you also use the DynamoDB example function, the process can emit child spans for AWS SDK calls. Those spans can be filtered by `dynamodb.query_name = "listCustomerOrders"` and analyzed with `scope: "all"`.
-
-Until `dynamodb.query_name` is promoted, query it through `/sql`, for example:
-
-```sql
-SELECT
-  date_trunc('minute', ts) AS minute,
-  PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_duration_ms
-FROM events
-WHERE "rpc.service" = 'DynamoDB'
-  AND map_extract_value(attributes_overflow, 'dynamodb.query_name') = '"listCustomerOrders"'
-GROUP BY 1
-ORDER BY 1 ASC;
-```
-
-## Typecheck
-
-```bash
-pnpm --filter wide-events-example-node-service typecheck
-```
+For SDK typing: Postgres and Redis use official client types, while AWS uses a lightweight hybrid client type so SDK dependencies stay minimal.

@@ -12,6 +12,18 @@ export default defineConfig({
         replacement: path.join(repoRoot, "packages/sdk/src/edge/index.ts"),
       },
       {
+        find: "@wide-events/sdk/instrumentation/pg",
+        replacement: path.join(repoRoot, "packages/sdk/src/node/instrumentation/pg.ts"),
+      },
+      {
+        find: "@wide-events/sdk/instrumentation/aws-sdk-v3",
+        replacement: path.join(repoRoot, "packages/sdk/src/node/instrumentation/aws-sdk-v3.ts"),
+      },
+      {
+        find: "@wide-events/sdk/instrumentation/ioredis",
+        replacement: path.join(repoRoot, "packages/sdk/src/node/instrumentation/ioredis.ts"),
+      },
+      {
         find: "@wide-events/sdk",
         replacement: path.join(repoRoot, "packages/sdk/src/node/index.ts"),
       },

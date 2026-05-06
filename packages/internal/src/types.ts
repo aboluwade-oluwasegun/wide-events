@@ -9,10 +9,10 @@ export type EventValue =
 
 export type DynamicEventAttributes = Record<string, EventValue>;
 
-export interface FlatEventRow {
-  trace_id: string;
-  span_id: string;
-  parent_span_id: string | null;
+export interface StoredEventRow {
+  event_id: string;
+  correlation_id: string;
+  parent_event_id: string | null;
   ts: string;
   duration_ms: number | null;
   main: boolean;
@@ -30,6 +30,35 @@ export interface FlatEventRow {
   "user.org.id": string | null;
   attributes_overflow: DynamicEventAttributes;
   promoted_attribute_hints: string[];
+}
+
+export interface WideEvent {
+  event_id?: string | undefined;
+  correlation_id?: string | undefined;
+  parent_event_id?: string | null | undefined;
+  ts?: string | undefined;
+  duration_ms?: number | null | undefined;
+  main?: boolean | undefined;
+  sample_rate?: number | undefined;
+  name?: string | undefined;
+  type?: string | undefined;
+  "service.name"?: string | null | undefined;
+  "service.environment"?: string | null | undefined;
+  "service.version"?: string | null | undefined;
+  "http.route"?: string | null | undefined;
+  "http.status_code"?: number | null | undefined;
+  "http.request.method"?: string | null | undefined;
+  error?: boolean | null | undefined;
+  "exception.slug"?: string | null | undefined;
+  "user.id"?: string | null | undefined;
+  "user.type"?: string | null | undefined;
+  "user.org.id"?: string | null | undefined;
+  attributes?: DynamicEventAttributes | undefined;
+  promote?: string[] | undefined;
+}
+
+export interface WideEventBatch {
+  events: WideEvent[];
 }
 
 export type QueryAggregateFunction =
@@ -100,8 +129,8 @@ export interface ColumnInfo {
   lastSeenAt: string | null;
 }
 
-export interface TraceResult {
-  traceId: string;
+export interface EventsResult {
+  correlationId: string;
   rows: QueryRow[];
 }
 

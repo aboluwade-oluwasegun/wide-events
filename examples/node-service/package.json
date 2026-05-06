@@ -6,9 +6,14 @@
     "dev": "tsx src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
+  "devDependencies": {
+    "@types/pg": "^8.15.5"
+  },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1029.0",
     "@aws-sdk/lib-dynamodb": "3.1029.0",
-    "@wide-events/sdk": "workspace:*"
+    "@wide-events/sdk": "workspace:*",
+    "ioredis": "^5.9.2",
+    "pg": "^8.16.0"
   }
 }

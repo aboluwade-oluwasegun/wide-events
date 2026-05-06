@@ -1,1 +1,0 @@
-{"version":3,"file":"columns.js","sourceRoot":"","sources":["../../src/routes/columns.ts"],"names":[],"mappings":"AAGA,MAAM,UAAU,oBAAoB,CAClC,GAAoB,EACpB,YAAmC;IAEnC,GAAG,CAAC,GAAG,CAAC,UAAU,EAAE,GAAG,EAAE,CAAC,CAAC;QACzB,OAAO,EAAE,YAAY,CAAC,OAAO,CAAC,WAAW,CAAC,YAAY,CAAC,MAAM,CAAC;KAC/D,CAAC,CAAC,CAAC;AACN,CAAC"}

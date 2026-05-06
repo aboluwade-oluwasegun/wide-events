@@ -1,1 +1,0 @@
-{"version":3,"file":"traceparent.d.ts","sourceRoot":"","sources":["../../src/shared/traceparent.ts"],"names":[],"mappings":"AAGA,MAAM,WAAW,iBAAiB;IAChC,OAAO,EAAE,MAAM,CAAC;IAChB,YAAY,EAAE,MAAM,CAAC;CACtB;AAED,wBAAgB,gBAAgB,CAAC,KAAK,EAAE,MAAM,GAAG,iBAAiB,GAAG,IAAI,CAgBxE;AAED,wBAAgB,iBAAiB,CAAC,OAAO,EAAE,MAAM,EAAE,MAAM,EAAE,MAAM,GAAG,MAAM,CAEzE"}

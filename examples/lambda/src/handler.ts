@@ -50,7 +50,6 @@ export function createLambdaExample(options: LambdaExampleOptions = {}): {
     APIGatewayProxyStructuredResultV2
   >((event) => {
     wideEvents.annotate({
-      main: true,
       "http.request.method": event.requestContext.http.method,
       "http.route": event.rawPath || "/lambda",
     });

@@ -1,20 +1,22 @@
 # wide-events
 
-Self-hosted observability for wide-event style analysis on DuckDB.
+Self-hosted structured event observability on DuckDB.
 
-`wide-events` stores one row per span, but treats `main=true` service-root spans as the primary rows for product-style queries. The collector accepts OTLP over HTTP JSON, writes into DuckDB, and exposes a small query API for dashboards, scripts, notebooks, and trace drill-down. Dynamic attributes land in `attributes_overflow` first and can later be promoted into typed DuckDB columns by the collector.
+`wide-events` stores one row per wide event. Applications send native JSON events to the collector, the collector writes them into DuckDB, and the query API supports product-style questions over high-cardinality fields. Stable dynamic fields can be promoted into typed DuckDB columns; overflow fields remain available through SQL.
 
 ## Packages
 
-| Package                  | Role                                                               |
-| ------------------------ | ------------------------------------------------------------------ |
-| `@wide-events/sdk`       | Node and edge instrumentation that exports spans to the collector. |
-| `@wide-events/client`    | Typed HTTP client for querying the collector.                      |
-| `@wide-events/collector` | Collector server, query API, and CLI entrypoint.                   |
+| Package                  | Role                                                       |
+| ------------------------ | ---------------------------------------------------------- |
+| `@wide-events/sdk`       | Lightweight Node, Lambda, and edge structured event SDK.   |
+| `@wide-events/pino`      | Optional Pino bridge for log mixins and event sinks.       |
+| `@wide-events/client`    | Typed HTTP client for querying the collector.              |
+| `@wide-events/collector` | Collector server, query API, and CLI entrypoint.           |
 
 Package-specific docs:
 
 - [packages/sdk/README.md](packages/sdk/README.md)
+- [packages/pino/README.md](packages/pino/README.md)
 - [packages/client/README.md](packages/client/README.md)
 - [packages/collector/README.md](packages/collector/README.md)
 
@@ -24,50 +26,29 @@ Package-specific docs:
 2. Point the SDK at the collector URL.
 3. Query the collector with the client or raw HTTP.
 
-### Run the collector from a git checkout
-
-Requirements:
-
-- [Node.js](https://nodejs.org/) 22 or newer
-- [pnpm](https://pnpm.io/installation)
-
-```bash
-git clone https://github.com/aboluwade-oluwasegun/wide-events.git
-cd wide-events
-corepack enable
-pnpm install
-pnpm build
-mkdir -p .data
-WIDE_EVENTS_DUCKDB_PATH=./.data/wide-events.db pnpm --filter @wide-events/collector exec node dist/cli.js
-```
-
-The collector listens on `http://localhost:4318` by default.
-
 ### Run the collector from npm
 
 ```bash
 WIDE_EVENTS_DUCKDB_PATH=./wide-events.db npx wide-events-collector
 ```
 
+The collector listens on `http://localhost:4318` by default.
+
 ### Run the collector with Docker
 
 The Docker workflow publishes to `docker.io/oluwasegun7/wide-events-collector`.
 
 ```bash
-docker pull oluwasegun7/wide-events-collector:0.1.0
+docker pull oluwasegun7/wide-events-collector:0.2.0
 
 docker run --rm \
   -e WIDE_EVENTS_DUCKDB_PATH=/data/wide-events.db \
   -v "$(pwd)/wide-events-data:/data" \
   -p 4318:4318 \
-  oluwasegun7/wide-events-collector:0.1.0
+  oluwasegun7/wide-events-collector:0.2.0
 ```
 
-For single-host deployment guidance, backups, and upgrades, see [docs/collector-operations.md](docs/collector-operations.md).
-
-## Instrument an application
-
-### Node
+## Instrument an Application
 
 ```bash
 npm install @wide-events/sdk
@@ -77,15 +58,38 @@ npm install @wide-events/sdk
 import { WideEvents } from "@wide-events/sdk";
 
 const wideEvents = new WideEvents({
-  serviceName: "api",
+  serviceName: "orders-api",
   environment: "production",
   collectorUrl: "http://localhost:4318",
 });
+
+app.use(wideEvents.middleware());
+
+app.post("/orders", async (req, res) => {
+  wideEvents.annotate(
+    {
+      "user.id": req.user.id,
+      "order.total": req.body.total,
+    },
+    { promote: ["order.total"] },
+  );
+
+  res.sendStatus(201);
+});
 ```
 
-`annotate()` writes onto the active service-root span. Outside an active request or invocation it is a no-op.
+`annotate()` writes fields onto the active event. `push()` appends nested data such as database calls:
 
-Node services can opt in to AWS SDK tracing with `autoInstrument.aws: true`. Lambda enables that AWS SDK instrumentation by default when `AWS_LAMBDA_FUNCTION_NAME` is present unless you explicitly disable it.
+```ts
+wideEvents.push("db.queries", {
+  operation: "select_order",
+  duration_ms: 12,
+});
+```
+
+Optional **auto-instrumentation** for Postgres, AWS SDK v3, Redis (`ioredis`), and outbound `fetch` lives in `@wide-events/sdk` subpaths; see [packages/sdk/README.md](packages/sdk/README.md#instrumentation).
+
+SDK wrappers automatically record thrown errors when they own the execution boundary. Plain Node middleware marks `status >= 500` responses as failed; use SDK route wrappers or platform wrappers when you need exception details without manual `recordError()`.
 
 ### Edge and Workers
 
@@ -94,14 +98,35 @@ import { WideEvents } from "@wide-events/sdk/edge";
 
 const wideEvents = new WideEvents({
   serviceName: "edge-gateway",
-  environment: "production",
-  collectorUrl: "http://localhost:4318",
+  collectorUrl: "https://collector.example.com",
 });
+
+export default {
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    return wideEvents.fetchHandler(request, ctx, () => new Response("ok"));
+  },
+};
 ```
 
-Edge runtimes must call `flush()` themselves, typically with `ctx.waitUntil(wideEvents.flush())`.
+### Optional Pino Bridge
 
-### Query the collector
+```bash
+npm install @wide-events/pino pino
+```
+
+```ts
+import pino from "pino";
+import { pinoEventSink, pinoMixin } from "@wide-events/pino";
+
+const logger = pino();
+const wideEvents = new WideEvents({
+  serviceName: "orders-api",
+  sink: pinoEventSink(logger),
+});
+const requestLogger = pino({ mixin: pinoMixin(wideEvents) });
+```
+
+## Query the Collector
 
 ```bash
 npm install @wide-events/client
@@ -113,14 +138,13 @@ import { WideEventsClient } from "@wide-events/client";
 const client = new WideEventsClient({ url: "http://localhost:4318" });
 
 const result = await client.query({
-  select: [{ fn: "COUNT", as: "requests" }],
-  filters: [{ field: "service.name", op: "eq", value: "api" }],
+  select: [{ fn: "P95", field: "duration_ms", as: "p95_ms" }],
+  filters: [{ field: "service.name", op: "eq", value: "orders-api" }],
+  groupBy: ["http.route"],
 });
 ```
 
-Structured queries default to `scope: "main"`, which means the collector injects `main = true` unless you explicitly set `scope: "all"`. Structured queries target baseline and promoted columns; overflow-only keys remain available through `/sql` and trace inspection.
-
-When you analyze DynamoDB or other AWS SDK spans, use `scope: "all"` because those are child spans rather than `main=true` root rows. A common pattern is labeling the active AWS span with an app-level attribute such as `dynamodb.query_name = "listCustomerOrders"`.
+Structured queries default to `scope: "main"`, which means the collector injects `main = true` unless you explicitly set `scope: "all"`. Structured queries target baseline and promoted columns; overflow-only keys remain available through `/sql`.
 
 ## Collector Configuration
 
@@ -138,19 +162,13 @@ Optional:
 - `WIDE_EVENTS_PROMOTION_INTERVAL_MS`: default `300000`
 - `WIDE_EVENTS_PROMOTION_MIN_ROWS`: default `1000`
 - `WIDE_EVENTS_PROMOTION_MIN_RATIO`: default `0.01`
-- `WIDE_EVENTS_PROMOTION_MAX_KEYS_PER_RUN`: default `1`
+- `WIDE_EVENTS_PROMOTION_MAX_KEYS_PER_RUN`: default `25`
 - `WIDE_EVENTS_QUEUE_LIMIT`: default `10000`
 
-## Examples
+## Notes
 
-- [examples/node-service/README.md](examples/node-service/README.md)
-- [examples/lambda/README.md](examples/lambda/README.md)
-- [examples/worker/README.md](examples/worker/README.md)
-
-## Operational Notes
-
-- The collector stores all spans, not only `main=true` rows. Trace reconstruction uses all rows for a `trace_id`.
-- Structured queries default to `main=true` semantics and expose baseline plus promoted fields. Use `scope: "all"` when you want all spans.
+- The collector accepts native wide events at `POST /v1/events`.
+- Event drill-down uses `GET /events/:correlationId`.
 - Overflow-only keys stay queryable through `/sql`, for example with `map_extract_value(attributes_overflow, 'feature.flag')`.
-- `/sql` is intentionally read-only in v0.1.
-- The collector has no built-in auth in v0.1. Keep it behind a trusted network boundary.
+- `/sql` is intentionally read-only.
+- The collector has no built-in auth. Keep it behind a trusted network boundary.
