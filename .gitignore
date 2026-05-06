@@ -1,0 +1,20 @@
+.cursor
+.qodo
+
+# Dependencies (`pnpm install`); never commit
+**/node_modules/
+
+wide-events-*.md
+**/tsconfig.tsbuildinfo
+
+# TypeScript / package build output (`pnpm build`); never commit
+**/dist/
+
+wide-events-*.tgz
+.dockerignore
+docs
+AGENTS.md
+docker-collector.yml
+tsconfig.eslint.tsbuildinfo
+.gitignore
+pino-observability.md
