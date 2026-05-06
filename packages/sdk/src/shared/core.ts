@@ -6,10 +6,9 @@ import {
   type WideEvent,
 } from "@wide-events/internal";
 import { normalizeAttributes, type AnnotateOptions, type AnnotationAttributes } from "./attributes";
+import { wrapFetch as wrapFetchInstrumentation } from "./instrumentation/fetch.js";
 import { postJson } from "./http";
 import { createCorrelationId, createEventId } from "./ids";
-
-type FetchInput = Parameters<typeof fetch>[0];
 
 export interface WideEventContext {
   event: WideEvent;
@@ -205,27 +204,7 @@ export class CoreWideEvents {
   }
 
   wrapFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
-    return (async (input: FetchInput, init?: RequestInit) => {
-      const startedAt = performance.now();
-      const requestInfo = describeFetchRequest(input, init);
-      try {
-        const response = await fetchImpl(input, init);
-        this.push("http.client.requests", {
-          ...requestInfo,
-          status_code: response.status,
-          duration_ms: performance.now() - startedAt,
-        });
-        return response;
-      } catch (error) {
-        this.push("http.client.errors", {
-          ...requestInfo,
-          duration_ms: performance.now() - startedAt,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        this.recordError(error, { slug: "fetch_failed", handled: false });
-        throw error;
-      }
-    }) as typeof fetch;
+    return wrapFetchInstrumentation(this, fetchImpl);
   }
 
   instrumentFetch(): void {
@@ -337,40 +316,4 @@ function normalizeError(
     "exception.stack": asError.stack ?? null,
     "exception.handled": options.handled ?? false,
   };
-}
-
-function describeFetchRequest(
-  input: FetchInput,
-  init?: RequestInit,
-): DynamicEventAttributes {
-  const url = getFetchUrl(input);
-  const parsed = safeUrl(url);
-  return {
-    method: init?.method ?? getFetchMethod(input) ?? "GET",
-    url: parsed ? `${parsed.origin}${parsed.pathname}` : url,
-    host: parsed?.host ?? null,
-    path: parsed?.pathname ?? null,
-  };
-}
-
-function getFetchUrl(input: FetchInput): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.href;
-  }
-  return input.url;
-}
-
-function getFetchMethod(input: FetchInput): string | null {
-  return typeof input === "object" && "method" in input ? input.method : null;
-}
-
-function safeUrl(value: string): URL | null {
-  try {
-    return new URL(value);
-  } catch {
-    return null;
-  }
 }

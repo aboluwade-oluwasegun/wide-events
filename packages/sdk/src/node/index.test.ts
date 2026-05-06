@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import type { Pool } from "pg";
+import type Redis from "ioredis";
 import { describe, expect, it, vi } from "vitest";
 import { WideEvents } from "./index";
 
@@ -109,6 +111,112 @@ describe("WideEvents node SDK", () => {
             }),
           ],
           "exception.message": "offline",
+        }),
+      );
+    });
+  });
+
+  it("supports constructor-driven fetch instrumentation", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 200 }));
+    globalThis.fetch = fetchMock;
+
+    const wide = new WideEvents({ serviceName: "payments" }, { fetch: true });
+
+    try {
+      await wide.run({}, async () => {
+        await fetch("http://api.test/checkout", { method: "POST" });
+        expect(wide.current()?.attributes).toEqual(
+          expect.objectContaining({
+            "http.client.requests": [
+              expect.objectContaining({
+                host: "api.test",
+                path: "/checkout",
+                status_code: 200,
+              }),
+            ],
+          }),
+        );
+      });
+    } finally {
+      await wide.shutdown();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("supports constructor-driven pg instrumentation", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rowCount: 1 })),
+    } as unknown as Pool;
+
+    const wide = new WideEvents({ serviceName: "payments" }, { pg: [pool] });
+
+    await wide.run({}, async () => {
+      await pool.query("SELECT 1");
+      expect(wide.current()?.attributes).toEqual(
+        expect.objectContaining({
+          "db.queries": [
+            expect.objectContaining({
+              row_count: 1,
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it("supports constructor-driven redis instrumentation", async () => {
+    const redis = new EventEmitter() as unknown as Redis;
+    const wide = new WideEvents({ serviceName: "payments" }, { redis: [redis] });
+
+    await wide.run({}, async () => {
+      redis.emit("command", { commandId: "1", name: "get", args: ["session:1"] });
+      redis.emit("reply", { commandId: "1", name: "get", args: ["session:1"] });
+
+      expect(wide.current()?.attributes).toEqual(
+        expect.objectContaining({
+          "redis.commands": [
+            expect.objectContaining({
+              command: "GET",
+              key: "session:1",
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it("supports constructor-driven aws instrumentation", async () => {
+    let captured:
+      | ((next: (args: { input: unknown }) => Promise<{ output: unknown }>, context: { commandName: string }) => (args: { input: unknown }) => Promise<{ output: unknown }>)
+      | undefined;
+
+    const awsClient = {
+      config: { serviceId: "DynamoDB" },
+      middlewareStack: {
+        add: (middleware: typeof captured extends undefined ? never : NonNullable<typeof captured>) => {
+          captured = middleware;
+        },
+      },
+    };
+
+    const wide = new WideEvents({ serviceName: "payments" }, { aws: [awsClient] });
+
+    await wide.run({}, async () => {
+      await captured?.(
+        async () => ({ output: { ConsumedCapacity: { CapacityUnits: 2 } } }),
+        { commandName: "QueryCommand" },
+      )({ input: { TableName: "orders" } });
+
+      expect(wide.current()?.attributes).toEqual(
+        expect.objectContaining({
+          "aws.client.operations": [
+            expect.objectContaining({
+              operation: "QueryCommand",
+              service_id: "DynamoDB",
+              table: "orders",
+            }),
+          ],
         }),
       );
     });

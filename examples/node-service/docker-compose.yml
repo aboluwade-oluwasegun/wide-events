@@ -1,0 +1,17 @@
+# Optional local databases for the node-service example (Postgres + Redis).
+# Start with: `docker compose -f examples/node-service/docker-compose.yml up -d`
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wide
+      POSTGRES_PASSWORD: wide
+      POSTGRES_DB: widetest
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"

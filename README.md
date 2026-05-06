@@ -87,6 +87,8 @@ wideEvents.push("db.queries", {
 });
 ```
 
+Optional **auto-instrumentation** for Postgres, AWS SDK v3, Redis (`ioredis`), and outbound `fetch` lives in `@wide-events/sdk` subpaths; see [packages/sdk/README.md](packages/sdk/README.md#instrumentation).
+
 SDK wrappers automatically record thrown errors when they own the execution boundary. Plain Node middleware marks `status >= 500` responses as failed; use SDK route wrappers or platform wrappers when you need exception details without manual `recordError()`.
 
 ### Edge and Workers

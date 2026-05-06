@@ -1,8 +1,13 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { instrumentAwsSdkV3 } from "@wide-events/sdk/instrumentation/aws-sdk-v3";
 import type { WideEvents } from "@wide-events/sdk";
 
 export interface OrdersQueryExampleOptions {
+  /**
+   * Inject a prepared document client (for tests).
+   * If omitted, builds a regional client plus optional {@link instrumentAwsSdkV3}.
+   */
   client?: DynamoDBDocumentClient;
   ordersByCustomerIndexName?: string;
   region?: string;
@@ -15,13 +20,15 @@ export function createOrdersQueryExample(
 ): {
   listCustomerOrders(customerId: string, monthPrefix: string): Promise<unknown>;
 } {
-  const client =
+  const docClient =
     options.client ??
-    DynamoDBDocumentClient.from(
-      new DynamoDBClient({
+    (() => {
+      const dynamoBase = new DynamoDBClient({
         region: options.region ?? process.env["AWS_REGION"] ?? "us-east-1",
-      }),
-    );
+      });
+      instrumentAwsSdkV3(dynamoBase, wideEvents);
+      return DynamoDBDocumentClient.from(dynamoBase);
+    })();
   const tableName = options.tableName ?? "orders";
   const indexName =
     options.ordersByCustomerIndexName ?? "by_customer_created_at";
@@ -32,7 +39,7 @@ export function createOrdersQueryExample(
         "dynamodb.query_name": "listCustomerOrders",
       });
 
-      return await client.send(
+      return await docClient.send(
         new QueryCommand({
           TableName: tableName,
           IndexName: indexName,

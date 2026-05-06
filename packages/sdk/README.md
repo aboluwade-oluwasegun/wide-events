@@ -75,6 +75,79 @@ export default {
 };
 ```
 
+## Instrumentation
+
+Instrumentation is Node-only and client-driven for database/cache/aws clients. The preferred API is a constructor-level instrumentation object:
+
+```ts
+import { WideEvents } from "@wide-events/sdk";
+import { Pool } from "pg";
+import Redis from "ioredis";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+
+const pool = new Pool({ connectionString: process.env["DATABASE_URL"] });
+const redis = new Redis(process.env["REDIS_URL"] ?? "");
+const dynamo = new DynamoDBClient({});
+
+const wideEvents = new WideEvents(
+  { serviceName: "api", collectorUrl },
+  {
+    fetch: true,
+    pg: [pool],
+    redis: [redis],
+    aws: [dynamo], // instrument base AWS SDK v3 client
+  },
+);
+
+const doc = DynamoDBDocumentClient.from(dynamo);
+```
+
+`fetch` in the second argument is equivalent to `autoInstrument.fetch` in the core options (kept for backward compatibility). If both are present, the second argument value is used.
+
+You can still instrument manually with subpath installers when you want per-client options:
+
+```ts
+import { instrumentPg } from "@wide-events/sdk/instrumentation/pg";
+import { instrumentAwsSdkV3 } from "@wide-events/sdk/instrumentation/aws-sdk-v3";
+import { instrumentIoredis } from "@wide-events/sdk/instrumentation/ioredis";
+
+instrumentPg(pool, wideEvents, { sqlTruncateLength: 120 });
+instrumentIoredis(redis, wideEvents);
+instrumentAwsSdkV3(dynamo, wideEvents);
+```
+
+Node-only integrations are exposed as package subpaths so edge bundles never pull TCP clients:
+
+```bash
+npm install @wide-events/sdk pg ioredis
+npm install @wide-events/sdk @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb
+```
+
+Typing strategy keeps the SDK small:
+
+- `pg` / `ioredis` use official library types in constructor and installer signatures for strong autocomplete.
+- AWS SDK v3 uses a lightweight hybrid client contract (`AwsSdkV3ClientTarget`) to stay compatible across Smithy overloads without adding heavy dependency coupling.
+
+`WideEvents` satisfies `InstrumentationHooks`, so helper functions can stay generic:
+
+```ts
+import type { InstrumentationHooks } from "@wide-events/sdk";
+
+function helper(hooks: InstrumentationHooks, pool: Pool) {
+  instrumentPg(pool, hooks);
+}
+```
+
+Emitted **attribute arrays** use dotted keys aligned with outbound HTTP instrumentation:
+
+| Subpath | Success key | Failure key |
+| --- | --- | --- |
+| (fetch / SDK) | `http.client.requests` | `http.client.errors` |
+| `@wide-events/sdk/instrumentation/pg` | `db.queries` | `db.errors` |
+| `@wide-events/sdk/instrumentation/aws-sdk-v3` | `aws.client.operations` | `aws.client.errors` |
+| `@wide-events/sdk/instrumentation/ioredis` | `redis.commands` | `redis.errors` |
+
 ## API
 
 | Method | Purpose |

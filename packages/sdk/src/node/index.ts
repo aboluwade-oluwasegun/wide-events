@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WideEvent } from "@wide-events/internal";
+import type { Cluster, Redis } from "ioredis";
+import type { Pool, PoolClient } from "pg";
+import { instrumentAwsSdkV3, type AwsSdkV3ClientTarget } from "./instrumentation/aws-sdk-v3.js";
+import { instrumentIoredis } from "./instrumentation/ioredis.js";
+import { instrumentPg } from "./instrumentation/pg.js";
 import {
   CoreWideEvents,
   type ContextStorage,
@@ -8,6 +13,7 @@ import {
   type WideEventContext,
   type WideEventSink,
 } from "../shared/core";
+import type { InstrumentationHooks } from "../shared/instrumentation/types.js";
 import {
   resolveNodeOptions,
   type ResolvedWideEventsOptions,
@@ -39,17 +45,43 @@ class AsyncContextStorage implements ContextStorage {
   }
 }
 
-export class WideEvents {
+export interface WideEventsNodeInstrumentationOptions {
+  fetch?: boolean | undefined;
+  pg?: Array<Pool | PoolClient> | undefined;
+  redis?: Array<Redis | Cluster> | undefined;
+  aws?: AwsSdkV3ClientTarget[] | undefined;
+}
+
+export class WideEvents implements InstrumentationHooks {
   readonly options: ResolvedWideEventsOptions;
   private readonly storage = new AsyncContextStorage();
   private readonly core: CoreWideEvents;
 
-  constructor(options: WideEventsOptions) {
+  constructor(
+    options: WideEventsOptions,
+    instrumentation: WideEventsNodeInstrumentationOptions = {},
+  ) {
     this.options = resolveNodeOptions(options);
     this.core = new CoreWideEvents(this.options, this.storage);
+    this.applyNodeInstrumentation(instrumentation);
+  }
 
-    if (this.options.autoInstrument.fetch) {
-      this.core.instrumentFetch();
+  private applyNodeInstrumentation(instrumentation: WideEventsNodeInstrumentationOptions): void {
+    const shouldInstrumentFetch = instrumentation.fetch ?? this.options.autoInstrument.fetch;
+    if (shouldInstrumentFetch) {
+      this.instrumentFetch();
+    }
+
+    for (const pool of instrumentation.pg ?? []) {
+      instrumentPg(pool, this);
+    }
+
+    for (const client of instrumentation.redis ?? []) {
+      instrumentIoredis(client, this);
+    }
+
+    for (const client of instrumentation.aws ?? []) {
+      instrumentAwsSdkV3(client, this);
     }
   }
 
@@ -153,8 +185,11 @@ export class WideEvents {
   }
 }
 
-export function createWideEvents(options: WideEventsOptions): WideEvents {
-  return new WideEvents(options);
+export function createWideEvents(
+  options: WideEventsOptions,
+  instrumentation?: WideEventsNodeInstrumentationOptions,
+): WideEvents {
+  return new WideEvents(options, instrumentation);
 }
 
 function createRequestEvent(request: RequestLike): Partial<WideEvent> {
@@ -213,3 +248,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export type { WideEventsOptions, WideEventSink, RecordErrorOptions };
+export type { InstrumentationHooks } from "../shared/instrumentation/types.js";
