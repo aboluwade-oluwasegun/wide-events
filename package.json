@@ -25,9 +25,9 @@
     "test:watch": "vitest",
     "typecheck": "pnpm --filter @wide-events/internal build && pnpm -r --if-present typecheck",
     "clean": "pnpm -r --if-present clean",
-    "changeset": "pnpm -w exec changeset",
-    "version-packages": "pnpm -w exec changeset version",
-    "release": "pnpm build && pnpm -w exec changeset publish"
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && changeset publish"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7",
