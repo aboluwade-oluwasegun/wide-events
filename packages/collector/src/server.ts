@@ -1,20 +1,20 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import type { CollectorConfig } from "./config";
-import { readCollectorConfig } from "./config";
-import { resolveCollectorError } from "./errors";
-import type { CollectorLogger } from "./logger";
-import { registerColumnRoutes } from "./routes/columns";
-import { registerHealthRoute } from "./routes/health";
-import { registerQueryRoutes } from "./routes/query";
-import { registerSqlRoutes } from "./routes/sql";
-import { registerEventQueryRoutes } from "./routes/events";
-import { registerEventRoutes } from "./routes/v1-events";
-import { PromotionJob } from "./jobs/promotion";
-import { DuckDbDatabase } from "./storage/database";
-import { AttributeCatalog } from "./storage/attribute-catalog";
-import { SchemaRegistry } from "./storage/schema-registry";
-import { CollectorStore } from "./storage/store";
-import { RetentionJob } from "./jobs/retention";
+import type { CollectorConfig } from "./config.js";
+import { readCollectorConfig } from "./config.js";
+import { resolveCollectorError } from "./errors.js";
+import type { CollectorLogger } from "./logger.js";
+import { registerColumnRoutes } from "./routes/columns.js";
+import { registerHealthRoute } from "./routes/health.js";
+import { registerQueryRoutes } from "./routes/query.js";
+import { registerSqlRoutes } from "./routes/sql.js";
+import { registerEventQueryRoutes } from "./routes/events.js";
+import { registerEventRoutes } from "./routes/v1-events.js";
+import { PromotionJob } from "./jobs/promotion.js";
+import { DuckDbDatabase } from "./storage/database.js";
+import { AttributeCatalog } from "./storage/attribute-catalog.js";
+import { SchemaRegistry } from "./storage/schema-registry.js";
+import { CollectorStore } from "./storage/store.js";
+import { RetentionJob } from "./jobs/retention.js";
 
 export interface CollectorDependencies {
   config: CollectorConfig;
