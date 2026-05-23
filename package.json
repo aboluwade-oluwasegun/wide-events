@@ -25,9 +25,9 @@
     "test:watch": "vitest",
     "typecheck": "pnpm --filter @wide-events/internal build && pnpm -r --if-present typecheck",
     "clean": "pnpm -r --if-present clean",
-    "changeset": "pnpm exec changeset",
-    "version-packages": "pnpm exec changeset version",
-    "release": "pnpm build && pnpm exec changeset publish"
+    "changeset": "node ./node_modules/@changesets/cli/bin.js",
+    "version-packages": "node ./node_modules/@changesets/cli/bin.js version",
+    "release": "pnpm build && node ./node_modules/@changesets/cli/bin.js publish"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7",
