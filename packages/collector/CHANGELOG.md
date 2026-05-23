@@ -1,5 +1,11 @@
 # @wide-events/collector
 
+## 0.3.1
+
+### Patch Changes
+
+- 63e3250: Fix collector build and runtime module resolution by compiling with NodeNext and `.js` import specifiers instead of `tsc-alias`.
+
 ## 0.3.0
 
 ### Minor Changes
