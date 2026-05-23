@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { eventsParamsSchema } from "@wide-events/internal";
-import type { CollectorDependencies } from "../server";
+import type { CollectorDependencies } from "../server.js";
 
 export function registerEventQueryRoutes(
   app: FastifyInstance,

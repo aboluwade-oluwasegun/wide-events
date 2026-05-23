@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { wideEventBatchSchema } from "@wide-events/internal";
-import { normalizeEventBatch } from "../events/normalize";
-import type { CollectorDependencies } from "../server";
+import { normalizeEventBatch } from "../events/normalize.js";
+import type { CollectorDependencies } from "../server.js";
 
 export function registerEventRoutes(
   app: FastifyInstance,

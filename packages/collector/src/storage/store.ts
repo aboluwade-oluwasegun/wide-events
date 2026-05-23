@@ -8,17 +8,17 @@ import {
   type StoredEventRow,
   type InferredAttributeType,
 } from "@wide-events/internal";
-import type { CollectorConfig } from "../config";
-import { QueueLimitExceededError } from "../errors";
-import { noopCollectorLogger, type CollectorLogger } from "../logger";
+import type { CollectorConfig } from "../config.js";
+import { QueueLimitExceededError } from "../errors.js";
+import { noopCollectorLogger, type CollectorLogger } from "../logger.js";
 import {
   inferValueType,
   mergeInferredType,
   type AttributeCatalog
-} from "./attribute-catalog";
-import type { DuckDbDatabase } from "./database";
-import type { SchemaRegistry } from "./schema-registry";
-import { SerializedExecutor } from "./serialized-executor";
+} from "./attribute-catalog.js";
+import type { DuckDbDatabase } from "./database.js";
+import type { SchemaRegistry } from "./schema-registry.js";
+import { SerializedExecutor } from "./serialized-executor.js";
 
 interface PendingBatch {
   rows: StoredEventRow[];
