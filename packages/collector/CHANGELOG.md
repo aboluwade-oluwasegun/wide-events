@@ -1,5 +1,11 @@
 # @wide-events/collector
 
+## 0.3.2
+
+### Patch Changes
+
+- 0c0d4c5: Fix container healthchecks on slim Node images by installing curl and adding a collector Docker smoke test in CI so `/health` probes keep working in Coolify-style HTTP checks.
+
 ## 0.3.1
 
 ### Patch Changes
