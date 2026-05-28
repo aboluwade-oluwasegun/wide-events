@@ -84,3 +84,18 @@ jobs:
 
       - name: Build collector image
         run: docker build -f packages/collector/Dockerfile -t wide-events-collector:ci .
+
+      - name: Smoke test collector health endpoint
+        run: |
+          cid=$(docker run -d \
+            -e WIDE_EVENTS_DUCKDB_PATH=/tmp/wide-events.db \
+            wide-events-collector:ci)
+          trap 'docker rm -f "$cid"' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec "$cid" curl -fsS http://127.0.0.1:4318/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$cid"
+          exit 1

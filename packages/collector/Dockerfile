@@ -11,6 +11,9 @@ COPY packages/internal ./packages/internal
 COPY packages/collector ./packages/collector
 
 RUN corepack enable \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends curl \
+  && rm -rf /var/lib/apt/lists/* \
   && pnpm config set store-dir /pnpm/store \
   && pnpm install --filter @wide-events/collector... --frozen-lockfile \
   && pnpm --filter @wide-events/internal build \
@@ -20,6 +23,9 @@ RUN corepack enable \
 ENV NODE_ENV=production
 
 EXPOSE 4318
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:4318/health > /dev/null || exit 1
 
 # Resolve workspace deps from the repo root (do not use pnpm in the final image).
 CMD ["node", "packages/collector/dist/cli.js"]
