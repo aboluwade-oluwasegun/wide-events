@@ -5,10 +5,10 @@ import {
   type EventValue,
   type WideEvent,
 } from "@wide-events/internal";
-import { normalizeAttributes, type AnnotateOptions, type AnnotationAttributes } from "./attributes";
+import { normalizeAttributes, type AnnotateOptions, type AnnotationAttributes } from "./attributes.js";
 import { wrapFetch as wrapFetchInstrumentation } from "./instrumentation/fetch.js";
-import { postJson } from "./http";
-import { createCorrelationId, createEventId } from "./ids";
+import { postJson } from "./http.js";
+import { createCorrelationId, createEventId } from "./ids.js";
 
 export interface WideEventContext {
   event: WideEvent;

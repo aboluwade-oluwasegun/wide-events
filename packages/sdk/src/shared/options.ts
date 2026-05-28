@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { WideEventSink } from "./core";
+import type { WideEventSink } from "./core.js";
 
 const autoInstrumentSchema = z
   .object({

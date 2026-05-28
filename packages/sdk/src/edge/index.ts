@@ -5,12 +5,12 @@ import {
   type RecordErrorOptions,
   type WideEventContext,
   type WideEventSink,
-} from "../shared/core";
+} from "../shared/core.js";
 import {
   edgeOptionsSchema,
   type EdgeWideEventsOptions,
   type ResolvedEdgeWideEventsOptions,
-} from "../shared/options";
+} from "../shared/options.js";
 
 interface ExecutionContextLike {
   waitUntil(promise: Promise<unknown>): void;

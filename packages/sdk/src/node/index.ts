@@ -12,13 +12,13 @@ import {
   type RecordErrorOptions,
   type WideEventContext,
   type WideEventSink,
-} from "../shared/core";
+} from "../shared/core.js";
 import type { InstrumentationHooks } from "../shared/instrumentation/types.js";
 import {
   resolveNodeOptions,
   type ResolvedWideEventsOptions,
   type WideEventsOptions,
-} from "../shared/options";
+} from "../shared/options.js";
 
 type NextFunction = (error?: unknown) => void;
 
