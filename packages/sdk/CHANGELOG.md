@@ -1,5 +1,11 @@
 # @wide-events/sdk
 
+## 0.4.1
+
+### Patch Changes
+
+- 880bed8: Fix published SDK package imports so bundled consumers can resolve shared runtime dependencies.
+
 ## 0.4.0
 
 ### Minor Changes

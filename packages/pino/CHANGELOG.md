@@ -1,5 +1,12 @@
 # @wide-events/pino
 
+## 0.1.1
+
+### Patch Changes
+
+- Updated dependencies [880bed8]
+  - @wide-events/sdk@0.4.1
+
 ## 0.1.0
 
 ### Minor Changes
