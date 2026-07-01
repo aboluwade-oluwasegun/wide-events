@@ -40,6 +40,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
+    "@clickhouse/client": "1.22.0",
     "@duckdb/node-api": "1.5.0-r.1",
     "@wide-events/internal": "workspace:*",
     "fastify": "5.8.2",

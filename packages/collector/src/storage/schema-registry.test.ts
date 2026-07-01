@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DuckDbDatabase } from "./database";
+import { DuckDbDatabase } from "./duckdb";
 import { SchemaRegistry } from "./schema-registry";
 
 describe("SchemaRegistry", () => {
@@ -32,7 +32,7 @@ describe("SchemaRegistry", () => {
     expect(registry.isKnownColumn("custom.one")).toBe(true);
     expect(registry.isKnownColumn("custom.two")).toBe(false);
 
-    const tableInfo = await database.executeWriteQuery("PRAGMA table_info('events')");
+    const tableInfo = await database.readColumns("events");
     expect(tableInfo.some((row) => row["name"] === "custom.one")).toBe(true);
     expect(tableInfo.some((row) => row["name"] === "custom.two")).toBe(false);
   });

@@ -10,15 +10,16 @@ import { registerSqlRoutes } from "./routes/sql.js";
 import { registerEventQueryRoutes } from "./routes/events.js";
 import { registerEventRoutes } from "./routes/v1-events.js";
 import { PromotionJob } from "./jobs/promotion.js";
-import { DuckDbDatabase } from "./storage/database.js";
+import { createCollectorDatabase } from "./storage/backend.js";
 import { AttributeCatalog } from "./storage/attribute-catalog.js";
 import { SchemaRegistry } from "./storage/schema-registry.js";
 import { CollectorStore } from "./storage/store.js";
 import { RetentionJob } from "./jobs/retention.js";
+import type { CollectorDatabase } from "./storage/types.js";
 
 export interface CollectorDependencies {
   config: CollectorConfig;
-  database: DuckDbDatabase;
+  database: CollectorDatabase;
   schema: SchemaRegistry;
   catalog: AttributeCatalog;
   store: CollectorStore;
@@ -50,7 +51,7 @@ export async function createCollectorServer(
       app.log.error(bindings, message);
     }
   };
-  const database = await DuckDbDatabase.create(config.duckDbPath);
+  const database = await createCollectorDatabase(config);
   const schema = new SchemaRegistry(config.maxPromotedColumns);
   await schema.hydrate(database);
   const catalog = new AttributeCatalog();
@@ -111,7 +112,7 @@ export async function createCollectorServer(
       await promotionJob.stop();
       await store.flush();
       await app.close();
-      database.close();
+      await database.close();
     }
   };
 }

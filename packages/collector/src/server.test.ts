@@ -193,9 +193,10 @@ describe("collector server", () => {
 });
 
 function createTestCollectorConfig(
-  overrides: Partial<CollectorConfig>,
-): CollectorConfig {
+  overrides: Partial<Extract<CollectorConfig, { storage: "duckdb" }>>,
+): Extract<CollectorConfig, { storage: "duckdb" }> {
   return {
+    storage: "duckdb",
     duckDbPath: "unused",
     port: 4318,
     batchSize: 100,

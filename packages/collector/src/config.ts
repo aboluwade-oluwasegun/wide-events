@@ -1,7 +1,6 @@
 import { z } from "zod";
 
-export const collectorConfigSchema = z.object({
-  duckDbPath: z.string().min(1),
+const commonCollectorConfigSchema = z.object({
   port: z.number().int().positive().default(4318),
   batchSize: z.number().int().positive().default(100),
   batchTimeoutMs: z.number().int().positive().default(1_000),
@@ -14,13 +13,39 @@ export const collectorConfigSchema = z.object({
   queueLimit: z.number().int().positive().default(10_000)
 });
 
+const clickHouseConfigSchema = z.object({
+  url: z.url(),
+  database: z.string().min(1),
+  username: z.string().min(1).default("default"),
+  password: z.string().optional()
+});
+
+export const collectorConfigSchema = z.discriminatedUnion("storage", [
+  commonCollectorConfigSchema.extend({
+    storage: z.literal("duckdb"),
+    duckDbPath: z.string().min(1)
+  }),
+  commonCollectorConfigSchema.extend({
+    storage: z.literal("clickhouse"),
+    duckDbPath: z.string().min(1).optional(),
+    clickHouse: clickHouseConfigSchema
+  })
+]);
+
 export type CollectorConfig = z.infer<typeof collectorConfigSchema>;
 
 export function readCollectorConfig(
   env: NodeJS.ProcessEnv = process.env
 ): CollectorConfig {
   return collectorConfigSchema.parse({
+    storage: env["WIDE_EVENTS_STORAGE"] ?? "duckdb",
     duckDbPath: env["WIDE_EVENTS_DUCKDB_PATH"],
+    clickHouse: {
+      url: env["WIDE_EVENTS_CLICKHOUSE_URL"],
+      database: env["WIDE_EVENTS_CLICKHOUSE_DATABASE"],
+      username: env["WIDE_EVENTS_CLICKHOUSE_USERNAME"] ?? "default",
+      password: env["WIDE_EVENTS_CLICKHOUSE_PASSWORD"]
+    },
     port: parseInteger(env["WIDE_EVENTS_COLLECTOR_PORT"], 4318),
     batchSize: parseInteger(env["WIDE_EVENTS_BATCH_SIZE"], 100),
     batchTimeoutMs: parseInteger(env["WIDE_EVENTS_BATCH_TIMEOUT_MS"], 1_000),

@@ -1,12 +1,23 @@
 # @wide-events/collector
 
-Collector service and CLI for ingesting native wide events and querying DuckDB-backed observability data.
+Collector service and CLI for ingesting native wide events and querying observability data. DuckDB is the default storage backend; ClickHouse can be enabled for production deployments that need a server-side analytical database.
 
 ## Run
 
 ```bash
 WIDE_EVENTS_DUCKDB_PATH=./wide-events.db npx wide-events-collector
 ```
+
+Run with ClickHouse:
+
+```bash
+WIDE_EVENTS_STORAGE=clickhouse \
+WIDE_EVENTS_CLICKHOUSE_URL=http://localhost:8123 \
+WIDE_EVENTS_CLICKHOUSE_DATABASE=wide_events \
+npx wide-events-collector
+```
+
+The collector creates the ClickHouse database and tables on startup.
 
 ## Ingest
 
@@ -73,9 +84,20 @@ Lists baseline, overflow-only, promoted, and failed columns.
 
 ## Configuration
 
-Required:
+Storage:
+
+- `WIDE_EVENTS_STORAGE`: `duckdb` by default; set to `clickhouse` for ClickHouse.
+
+DuckDB storage:
 
 - `WIDE_EVENTS_DUCKDB_PATH`
+
+ClickHouse storage:
+
+- `WIDE_EVENTS_CLICKHOUSE_URL`
+- `WIDE_EVENTS_CLICKHOUSE_DATABASE`
+- `WIDE_EVENTS_CLICKHOUSE_USERNAME`: default `default`
+- `WIDE_EVENTS_CLICKHOUSE_PASSWORD`: optional
 
 Optional:
 

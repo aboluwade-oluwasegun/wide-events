@@ -1,8 +1,8 @@
 # wide-events
 
-Self-hosted structured event observability on DuckDB.
+Self-hosted structured event observability on DuckDB by default, with optional ClickHouse storage for higher-ingest deployments.
 
-`wide-events` stores one row per wide event. Applications send native JSON events to the collector, the collector writes them into DuckDB, and the query API supports product-style questions over high-cardinality fields. Stable dynamic fields can be promoted into typed DuckDB columns; overflow fields remain available through SQL.
+`wide-events` stores one row per wide event. Applications send native JSON events to the collector, the collector writes them into the configured analytical backend, and the query API supports product-style questions over high-cardinality fields. Stable dynamic fields can be promoted into typed columns; overflow fields remain available through SQL.
 
 ## Packages
 
@@ -19,6 +19,10 @@ Package-specific docs:
 - [packages/pino/README.md](packages/pino/README.md)
 - [packages/client/README.md](packages/client/README.md)
 - [packages/collector/README.md](packages/collector/README.md)
+
+Operational notes:
+
+- [wide-events-clickhouse.md](wide-events-clickhouse.md)
 
 ## Quick Start
 
@@ -148,9 +152,20 @@ Structured queries default to `scope: "main"`, which means the collector injects
 
 ## Collector Configuration
 
-Required:
+Storage:
+
+- `WIDE_EVENTS_STORAGE`: `duckdb` by default; set to `clickhouse` to use ClickHouse.
+
+DuckDB storage:
 
 - `WIDE_EVENTS_DUCKDB_PATH`: path to the DuckDB file
+
+ClickHouse storage:
+
+- `WIDE_EVENTS_CLICKHOUSE_URL`: HTTP(S) endpoint, for example `http://localhost:8123`
+- `WIDE_EVENTS_CLICKHOUSE_DATABASE`: database name; the collector creates it if needed
+- `WIDE_EVENTS_CLICKHOUSE_USERNAME`: default `default`
+- `WIDE_EVENTS_CLICKHOUSE_PASSWORD`: optional
 
 Optional:
 

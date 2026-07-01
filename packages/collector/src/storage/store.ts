@@ -2,7 +2,6 @@ import {
   BASELINE_COLUMN_NAMES,
   isBaselineColumn,
   isPrimitiveEventValue,
-  quoteIdentifier,
   sanitizeIdentifier,
   type EventPrimitive,
   type StoredEventRow,
@@ -16,9 +15,9 @@ import {
   mergeInferredType,
   type AttributeCatalog
 } from "./attribute-catalog.js";
-import type { DuckDbDatabase } from "./database.js";
 import type { SchemaRegistry } from "./schema-registry.js";
 import { SerializedExecutor } from "./serialized-executor.js";
+import type { CollectorDatabase } from "./types.js";
 
 interface PendingBatch {
   rows: StoredEventRow[];
@@ -33,7 +32,7 @@ export class CollectorStore {
   private pendingRowCount = 0;
 
   constructor(
-    private readonly database: DuckDbDatabase,
+    private readonly database: CollectorDatabase,
     private readonly schema: SchemaRegistry,
     private readonly catalog: AttributeCatalog,
     private readonly config: CollectorConfig,
@@ -107,10 +106,8 @@ export class CollectorStore {
 
     try {
       await this.executor.enqueue(async () => {
-        await this.database.execute("DELETE FROM events WHERE ts < ?", [
-          cutoff,
-        ]);
-        await this.database.execute("CHECKPOINT");
+        await this.database.deleteEventsBefore(cutoff);
+        await this.database.runRetentionMaintenance();
       });
 
       this.logger.info(
@@ -168,12 +165,11 @@ export class CollectorStore {
             return;
           }
 
-          const { sql, values } = buildBackfillStatement(
+          await this.database.backfillPromotedColumn(
             promoting.sanitizedKey,
             promoting.inferredType,
             promoting.key,
           );
-          await this.database.execute(sql, values);
           await this.catalog.markPromoted(
             this.database,
             promoting.key,
@@ -232,7 +228,7 @@ export class CollectorStore {
 }
 
 async function ensureHintedPromotions(
-  database: DuckDbDatabase,
+  database: CollectorDatabase,
   schema: SchemaRegistry,
   catalog: AttributeCatalog,
   rows: readonly StoredEventRow[],
@@ -285,7 +281,7 @@ async function ensureHintedPromotions(
 }
 
 async function insertRows(
-  database: DuckDbDatabase,
+  database: CollectorDatabase,
   schema: SchemaRegistry,
   catalog: AttributeCatalog,
   rows: readonly StoredEventRow[],
@@ -297,43 +293,32 @@ async function insertRows(
   const promotedColumns = catalog.getPromotedColumns();
   const promotedColumnsByName = buildPromotedColumnsByName(promotedColumns);
   const columnNames = collectInsertColumns(rows, promotedColumns);
-  const placeholders = rows
-    .map(() => {
-      const rowPlaceholders = columnNames.map((column) =>
-        column === "attributes_overflow"
-          ? "CAST(CAST(? AS JSON) AS MAP(VARCHAR, JSON))"
-          : "?",
-      );
-      return `(${rowPlaceholders.join(", ")})`;
-    })
-    .join(", ");
-  const sql = `INSERT INTO events (${columnNames
-    .map((column) => quoteIdentifier(column))
-    .join(", ")}) VALUES ${placeholders}`;
+  const insertRows: Array<Record<string, unknown>> = [];
 
-  const values: unknown[] = [];
   for (const row of rows) {
     const overflow = buildOverflowAttributes(row, promotedColumns);
+    const insertRow: Record<string, unknown> = {};
+
     for (const column of columnNames) {
       if (column === "attributes_overflow") {
-        values.push(JSON.stringify(overflow));
+        insertRow[column] = overflow;
         continue;
       }
 
       if (BASELINE_COLUMN_NAMES.includes(column)) {
-        values.push(serializeRowValue(row[column as keyof StoredEventRow]));
+        insertRow[column] = serializeRowValue(row[column as keyof StoredEventRow]);
         continue;
       }
 
       const promoted = promotedColumnsByName.get(column);
       const value = promoted ? row.attributes_overflow[promoted.key] : null;
-      values.push(
-        promoted ? normalizePromotedValue(value, promoted.type) : null,
-      );
+      insertRow[column] = promoted ? normalizePromotedValue(value, promoted.type) : null;
     }
+
+    insertRows.push(insertRow);
   }
 
-  await database.execute(sql, values);
+  await database.insertEventRows(columnNames, insertRows);
 }
 
 function collectInsertColumns(
@@ -371,17 +356,9 @@ function serializeRowValue(value: unknown): unknown {
 }
 
 async function readTotalRetainedRows(
-  database: DuckDbDatabase,
+  database: CollectorDatabase,
 ): Promise<number> {
-  const rows = await database.executeWriteQuery(
-    "SELECT COUNT(*) AS total FROM events",
-  );
-  const total = rows[0]?.["total"];
-  return typeof total === "number"
-    ? total
-    : typeof total === "string"
-      ? Number.parseInt(total, 10)
-      : 0;
+  return await database.countEvents();
 }
 
 function buildOverflowAttributes(
@@ -506,23 +483,4 @@ function normalizePromotedValue(value: unknown, type: string): unknown {
     default:
       return null;
   }
-}
-
-function buildBackfillStatement(
-  column: string,
-  type: string,
-  rawKey: string,
-): { sql: string; values: unknown[] } {
-  const expression =
-    type === "VARCHAR"
-      ? "json_extract_string(map_extract_value(attributes_overflow, ?), '$')"
-      : `TRY_CAST(map_extract_value(attributes_overflow, ?) AS ${type})`;
-
-  return {
-    sql: `UPDATE events
-      SET ${quoteIdentifier(column)} = ${expression}
-      WHERE ${quoteIdentifier(column)} IS NULL
-        AND map_extract_value(attributes_overflow, ?) IS NOT NULL`,
-    values: [rawKey, rawKey],
-  };
 }

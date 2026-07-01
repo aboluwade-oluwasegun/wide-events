@@ -7,7 +7,7 @@ import { WideEvents } from "./index";
 class FakeResponse extends EventEmitter {
   statusCode = 200;
 
-  once(event: "finish", listener: () => void): this {
+  override once(event: "finish", listener: () => void): this {
     return super.once(event, listener);
   }
 }
