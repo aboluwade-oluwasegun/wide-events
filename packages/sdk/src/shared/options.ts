@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { WideEventSink } from "./core.js";
+import { projectRulesConfigSchema } from "./project-rules.js";
 
 const autoInstrumentSchema = z
   .object({
@@ -9,6 +10,10 @@ const autoInstrumentSchema = z
     fetch: false
   });
 
+const projectsSchema = z
+  .union([z.boolean(), z.array(z.string().min(1)).min(1)])
+  .default(false);
+
 export const nodeOptionsSchema = z.object({
   serviceName: z.string().min(1),
   environment: z.string().default("development"),
@@ -16,6 +21,8 @@ export const nodeOptionsSchema = z.object({
   sampleRate: z.number().int().positive().default(1),
   disabled: z.boolean().default(false),
   batchSize: z.number().int().positive().default(100),
+  projects: projectsSchema,
+  projectRules: projectRulesConfigSchema.optional(),
   autoInstrument: autoInstrumentSchema
 });
 
@@ -36,6 +43,8 @@ export const edgeOptionsSchema = z.object({
   sampleRate: z.number().int().positive().default(1),
   disabled: z.boolean().default(false),
   batchSize: z.number().int().positive().default(100),
+  projects: projectsSchema,
+  projectRules: projectRulesConfigSchema.optional(),
   autoInstrument: autoInstrumentSchema
 });
 

@@ -3,19 +3,114 @@ import {
   isBaselineColumn,
   normalizeEventPrimitive,
   type DynamicEventAttributes,
+  type EventValue,
+  type InferredAttributeType,
+  type ProjectEventRow,
+  type ProjectFieldTypes,
   type StoredEventRow,
   type WideEvent,
   type WideEventBatch,
 } from "@wide-events/internal";
 
-const EVENT_META_KEYS = new Set(["attributes", "promote"]);
+type NormalizedEventBase = Omit<
+  StoredEventRow,
+  "attributes_overflow" | "promoted_attribute_hints"
+>;
+
+const EVENT_META_KEYS = new Set([
+  "attributes",
+  "promote",
+  "project_id",
+  "project_rule_version",
+  "project_fields",
+  "project_field_types",
+]);
+
+export interface NormalizedEventBatch {
+  defaultRows: StoredEventRow[];
+  projectRows: ProjectEventRow[];
+}
+
+export class EventNormalizationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EventNormalizationError";
+  }
+}
 
 export function normalizeEventBatch(batch: WideEventBatch): StoredEventRow[] {
-  return batch.events.map(normalizeEvent);
+  const normalized = normalizeEventBatchForIngest(batch);
+  if (normalized.projectRows.length > 0) {
+    throw new EventNormalizationError("Project events require project_events storage");
+  }
+  return normalized.defaultRows;
+}
+
+export function normalizeEventBatchForIngest(
+  batch: WideEventBatch,
+): NormalizedEventBatch {
+  const defaultRows: StoredEventRow[] = [];
+  const projectRows: ProjectEventRow[] = [];
+
+  for (const event of batch.events) {
+    if (hasProjectMetadata(event)) {
+      projectRows.push(normalizeProjectEvent(event));
+      continue;
+    }
+
+    defaultRows.push(normalizeEvent(event));
+  }
+
+  return { defaultRows, projectRows };
 }
 
 export function normalizeEvent(event: WideEvent): StoredEventRow {
+  if (hasProjectMetadata(event)) {
+    throw new EventNormalizationError("Project events require project_events storage");
+  }
+
   const row: StoredEventRow = {
+    ...normalizeEventBase(event),
+    attributes_overflow: normalizeDefaultOverflow(event),
+    promoted_attribute_hints: [...new Set(event.promote ?? [])],
+  };
+
+  return row;
+}
+
+export function normalizeProjectEvent(event: WideEvent): ProjectEventRow {
+  const projectId = event.project_id;
+  if (!projectId) {
+    throw new EventNormalizationError("Project metadata requires project_id");
+  }
+
+  const projectFields = event.project_fields;
+  if (!projectFields) {
+    throw new EventNormalizationError(
+      `Project event "${projectId}" requires project_fields`,
+    );
+  }
+
+  const projectFieldTypes = event.project_field_types;
+  if (!projectFieldTypes) {
+    throw new EventNormalizationError(
+      `Project event "${projectId}" requires project_field_types`,
+    );
+  }
+
+  validateProjectFieldTypes(projectFields, projectFieldTypes);
+
+  return {
+    ...normalizeEventBase(event),
+    project_id: projectId,
+    project_rule_version: event.project_rule_version ?? null,
+    project_fields: normalizeProjectFields(projectFields),
+    project_field_types: projectFieldTypes,
+  };
+}
+
+function normalizeEventBase(event: WideEvent): NormalizedEventBase {
+  const row: NormalizedEventBase = {
     event_id: event.event_id ?? randomUUID(),
     correlation_id: event.correlation_id ?? randomUUID(),
     parent_event_id: event.parent_event_id ?? null,
@@ -34,10 +129,18 @@ export function normalizeEvent(event: WideEvent): StoredEventRow {
     "user.id": event["user.id"] ?? null,
     "user.type": event["user.type"] ?? null,
     "user.org.id": event["user.org.id"] ?? null,
-    attributes_overflow: {},
-    promoted_attribute_hints: [],
   };
 
+  for (const [key, value] of Object.entries(event.attributes ?? {})) {
+    if (isBaselineColumn(key)) {
+      applyBaselineAttribute(row, key, value);
+    }
+  }
+
+  return row;
+}
+
+function normalizeDefaultOverflow(event: WideEvent): DynamicEventAttributes {
   const overflow: DynamicEventAttributes = {};
 
   for (const [key, value] of Object.entries(event)) {
@@ -53,21 +156,33 @@ export function normalizeEvent(event: WideEvent): StoredEventRow {
   }
 
   for (const [key, value] of Object.entries(event.attributes ?? {})) {
-    if (isBaselineColumn(key)) {
-      applyBaselineAttribute(row, key, value);
-      continue;
+    if (!isBaselineColumn(key)) {
+      overflow[key] = normalizeEventPrimitive(value);
     }
-
-    overflow[key] = normalizeEventPrimitive(value);
   }
 
-  row.attributes_overflow = overflow;
-  row.promoted_attribute_hints = [...new Set(event.promote ?? [])];
-  return row;
+  return overflow;
+}
+
+function normalizeProjectFields(fields: DynamicEventAttributes): DynamicEventAttributes {
+  const normalized: DynamicEventAttributes = {};
+  for (const [key, value] of Object.entries(fields)) {
+    normalized[key] = normalizeEventPrimitive(value);
+  }
+  return normalized;
+}
+
+function hasProjectMetadata(event: WideEvent): boolean {
+  return (
+    typeof event.project_id !== "undefined" ||
+    typeof event.project_rule_version !== "undefined" ||
+    typeof event.project_fields !== "undefined" ||
+    typeof event.project_field_types !== "undefined"
+  );
 }
 
 function applyBaselineAttribute(
-  row: StoredEventRow,
+  row: NormalizedEventBase,
   key: string,
   value: DynamicEventAttributes[string],
 ): void {
@@ -131,6 +246,63 @@ function applyBaselineAttribute(
     default:
       break;
   }
+}
+
+function validateProjectFieldTypes(
+  fields: DynamicEventAttributes,
+  fieldTypes: ProjectFieldTypes,
+): void {
+  for (const key of Object.keys(fields)) {
+    const type = fieldTypes[key];
+    if (!type) {
+      throw new EventNormalizationError(
+        `Project field "${key}" is missing a declared type`,
+      );
+    }
+
+    const value = fields[key];
+    if (!matchesProjectFieldType(value, type)) {
+      throw new EventNormalizationError(
+        `Project field "${key}" does not match declared type ${type}`,
+      );
+    }
+  }
+
+  for (const key of Object.keys(fieldTypes)) {
+    if (!(key in fields)) {
+      throw new EventNormalizationError(
+        `Project field type "${key}" has no matching project field`,
+      );
+    }
+  }
+}
+
+function matchesProjectFieldType(
+  value: EventValue | undefined,
+  type: InferredAttributeType,
+): boolean {
+  if (value === null || typeof value === "undefined") {
+    return true;
+  }
+
+  switch (type) {
+    case "BOOLEAN":
+      return typeof value === "boolean";
+    case "BIGINT":
+      return typeof value === "number" && Number.isInteger(value);
+    case "DOUBLE":
+      return typeof value === "number" && Number.isFinite(value);
+    case "VARCHAR":
+      return typeof value === "string";
+    case "JSON":
+      return true;
+    default:
+      return assertNever(type);
+  }
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unsupported project field type: ${String(value)}`);
 }
 
 function normalizeNullableInteger(value: unknown): number | null {

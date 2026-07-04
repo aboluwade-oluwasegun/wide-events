@@ -1,9 +1,10 @@
-import { BASELINE_COLUMN_NAMES } from "./schema";
+import { BASELINE_COLUMN_NAMES, type BaselineColumnName } from "./schema";
 import type { EventValue } from "./types";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9._-]+$/u;
 const DURATION_PATTERN = /^(\d+)(ms|s|m|h|d)$/u;
 export const PROMOTION_HINT_PREFIX = "wide_events.promote.";
+const BASELINE_COLUMN_SET: ReadonlySet<string> = new Set(BASELINE_COLUMN_NAMES);
 
 export function sanitizeIdentifier(identifier: string): string {
   const trimmed = identifier.trim();
@@ -22,8 +23,8 @@ export function quoteIdentifier(identifier: string): string {
   return `"${sanitizeIdentifier(identifier)}"`;
 }
 
-export function isBaselineColumn(field: string): boolean {
-  return BASELINE_COLUMN_NAMES.includes(field);
+export function isBaselineColumn(field: string): field is BaselineColumnName {
+  return BASELINE_COLUMN_SET.has(field);
 }
 
 export function isPrimitiveEventValue(value: unknown): value is string | number | boolean | null {

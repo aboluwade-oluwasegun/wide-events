@@ -60,9 +60,13 @@ export class WideEvents {
   }
 
   annotate: CoreWideEvents["annotate"] = (...args) => this.core.annotate(...args);
+  annotateProject: CoreWideEvents["annotateProject"] = (...args) =>
+    this.core.annotateProject(...args);
   push: CoreWideEvents["push"] = (...args) => this.core.push(...args);
   recordError: CoreWideEvents["recordError"] = (...args) => this.core.recordError(...args);
   wrapFetch: CoreWideEvents["wrapFetch"] = (...args) => this.core.wrapFetch(...args);
+  getProjectRules: CoreWideEvents["getProjectRules"] = (...args) =>
+    this.core.getProjectRules(...args);
   instrumentFetch(): void {
     this.core.instrumentFetch();
   }
@@ -125,3 +129,30 @@ function createRequestEvent(request: Request): Partial<WideEvent> {
 }
 
 export type { EdgeWideEventsOptions, WideEventSink, RecordErrorOptions };
+export type {
+  AnnotateProjectOptions,
+  ProjectAnnotationFields,
+  ProjectRoutingOption,
+} from "../shared/projects.js";
+export {
+  ProjectRulesManager,
+  parseProjectRulesDocument,
+} from "../shared/project-rules.js";
+export {
+  extractProjectMetadata,
+  findMatchingProjectRule,
+} from "../shared/project-extraction.js";
+export type {
+  ProjectExtractionRule,
+  ProjectRuleField,
+  ProjectRuleFieldSource,
+  ProjectRuleMatch,
+  ProjectRulesConfig,
+  ProjectRulesDocument,
+} from "../shared/project-rules.js";
+export type {
+  ProjectExtractionContext,
+  ProjectExtractionMetadata,
+  ProjectExtractionRequest,
+  ProjectExtractionResponse,
+} from "../shared/project-extraction.js";

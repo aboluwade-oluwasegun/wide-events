@@ -1,5 +1,6 @@
 import {
   BASELINE_COLUMN_TYPES,
+  PROJECT_EVENT_COLUMN_TYPES,
   sanitizeIdentifier,
   type InferredAttributeType,
 } from "@wide-events/internal";
@@ -14,7 +15,8 @@ type ClickHouseStorageType =
   | InferredAttributeType
   | "TIMESTAMPTZ"
   | "INTEGER"
-  | "MAP(VARCHAR, JSON)";
+  | "MAP(VARCHAR, JSON)"
+  | "MAP(VARCHAR, VARCHAR)";
 
 export function buildClickHouseSchemaStatements(
   database: string,
@@ -24,6 +26,7 @@ export function buildClickHouseSchemaStatements(
     database,
     "attribute_catalog",
   );
+  const projectEventsTable = clickHouseQualifiedIdentifier(database, "project_events");
 
   return [
     {
@@ -38,6 +41,22 @@ export function buildClickHouseSchemaStatements(
 ENGINE = MergeTree
 ORDER BY (${[
         "ts",
+        "service.name",
+        "correlation_id",
+        "event_id",
+      ]
+        .map(clickHouseQuoteIdentifier)
+        .join(", ")})`,
+    },
+    {
+      label: "project events table",
+      query: `CREATE TABLE IF NOT EXISTS ${projectEventsTable} (
+  ${buildClickHouseProjectEventsColumns().join(",\n  ")}
+)
+ENGINE = MergeTree
+ORDER BY (${[
+        "ts",
+        "project_id",
         "service.name",
         "correlation_id",
         "event_id",
@@ -123,6 +142,27 @@ function buildClickHouseEventsColumns(): string[] {
   });
 }
 
+function buildClickHouseProjectEventsColumns(): string[] {
+  return Object.entries(PROJECT_EVENT_COLUMN_TYPES).map(([column, storageType]) => {
+    if (column === "project_fields" || column === "project_field_types") {
+      return `${clickHouseQuoteIdentifier(column)} Map(String, String) DEFAULT map()`;
+    }
+
+    if (column === "main") {
+      return `${clickHouseQuoteIdentifier(column)} Bool DEFAULT false`;
+    }
+
+    if (column === "sample_rate") {
+      return `${clickHouseQuoteIdentifier(column)} Int32 DEFAULT 1`;
+    }
+
+    return `${clickHouseQuoteIdentifier(column)} ${toClickHouseColumnType(
+      storageType,
+      isNullableProjectEventColumn(column),
+    )}`;
+  });
+}
+
 function toClickHouseNonNullableColumnType(
   storageType: ClickHouseStorageType,
 ): string {
@@ -140,12 +180,26 @@ function toClickHouseNonNullableColumnType(
     case "BIGINT":
       return "Int64";
     case "MAP(VARCHAR, JSON)":
+    case "MAP(VARCHAR, VARCHAR)":
       return "Map(String, String)";
     case "JSON":
       return "String";
     default:
       return assertNever(storageType);
   }
+}
+
+function isNullableProjectEventColumn(column: string): boolean {
+  return ![
+    "event_id",
+    "correlation_id",
+    "ts",
+    "main",
+    "sample_rate",
+    "project_id",
+    "project_fields",
+    "project_field_types",
+  ].includes(column);
 }
 
 function isNullableBaselineColumn(column: string): boolean {

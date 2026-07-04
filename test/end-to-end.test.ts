@@ -252,6 +252,8 @@ function createTestCollectorConfig(
     promotionMinRatio: 0.01,
     promotionMaxKeysPerRun: 1,
     queueLimit: 10_000,
+    projectConfigTtlSeconds: 60,
+    projects: [],
     ...overrides,
   };
 }

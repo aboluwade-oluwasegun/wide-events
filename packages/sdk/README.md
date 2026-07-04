@@ -75,6 +75,116 @@ export default {
 };
 ```
 
+## Project-Scoped Events
+
+Project routing is opt-in. Omit `projects` or set it to `false` for default events only.
+
+Use explicit project IDs when the app already knows the projects it can emit:
+
+```ts
+const wideEvents = new WideEvents({
+  serviceName: "checkout-api",
+  environment: "production",
+  collectorUrl: "https://collector.example.com",
+  projects: ["project_checkout"],
+});
+
+app.post("/checkout", async (req, res) => {
+  wideEvents.annotateProject({
+    "cart.item_count": req.body.items.length,
+    "order.total": req.body.total,
+    "checkout.converted": true,
+  });
+
+  res.sendStatus(201);
+});
+```
+
+Use collector-driven routing when project config should update without redeploying the app:
+
+```ts
+const wideEvents = new WideEvents({
+  serviceName: "checkout-api",
+  environment: "production",
+  collectorUrl: "https://collector.example.com",
+  projects: true,
+});
+```
+
+With `projects: true`, the SDK fetches `GET /v1/projects/config` from the collector during export, caches the response for the collector-provided TTL, and refreshes after the TTL expires. `annotateProject()` emits project events with `project_id`, `project_rule_version`, `project_fields`, and `project_field_types`; those events are stored by the collector in `project_events`, not the default `events` table.
+
+### Project Rules Middleware
+
+Project rules let framework middleware extract project fields from request and response data without manually calling `annotateProject()` in route business logic.
+
+Configure the SDK with a CDN-hosted JSON rules document:
+
+```ts
+const wideEvents = new WideEvents({
+  serviceName: "checkout-api",
+  environment: "production",
+  collectorUrl: "https://collector.example.com",
+  projects: ["project_checkout"],
+  projectRules: {
+    url: "https://cdn.example.com/wide-events/checkout-project-rules.json",
+    refreshIntervalMs: 60_000,
+  },
+});
+```
+
+`projectRules.url` must return JSON. The SDK fetches it on demand, caches it for `refreshIntervalMs`, keeps the last valid rules when refresh fails, and disables automatic project extraction when no valid rules are available.
+
+Rules use exact method/path matching and direct dot-path extraction only:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "project_id": "project_checkout",
+      "project_rule_version": "2026-07-01",
+      "match": {
+        "method": "POST",
+        "path": "/checkout"
+      },
+      "fields": [
+        {
+          "field": "cart.item_count",
+          "source": "request.body",
+          "path": "cart.itemCount",
+          "type": "BIGINT"
+        },
+        {
+          "field": "order.total",
+          "source": "response.body",
+          "path": "order.total",
+          "type": "DOUBLE"
+        },
+        {
+          "field": "response.status",
+          "source": "response.status",
+          "type": "BIGINT"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Supported field sources are `request.body`, `request.query`, `request.params`, `request.headers`, `response.body`, and `response.status`. All sources except `response.status` require `path`. Supported field types are `BOOLEAN`, `BIGINT`, `DOUBLE`, `VARCHAR`, and `JSON`. Set `"optional": true` on a field to skip it when the path is missing; otherwise missing values are emitted as `null`.
+
+Framework adapters use the same rules engine:
+
+```ts
+app.use(wideEvents.expressMiddleware());
+```
+
+```ts
+await fastify.register(wideEvents.fastifyPlugin());
+```
+
+Hono and Nest helpers are also exported as `honoMiddleware()`, `nestMiddleware()`, and `nestInterceptor()`.
+
 ## Instrumentation
 
 Instrumentation is Node-only and client-driven for database/cache/aws clients. The preferred API is a constructor-level instrumentation object:
@@ -153,9 +263,15 @@ Emitted **attribute arrays** use dotted keys aligned with outbound HTTP instrume
 | Method | Purpose |
 | --- | --- |
 | `middleware()` | Creates Node request middleware and flushes an event on response finish. |
+| `expressMiddleware()` | Creates project-aware Express-compatible middleware. |
+| `fastifyPlugin()` | Registers project-aware Fastify hooks. |
+| `honoMiddleware()` | Creates project-aware Hono-compatible middleware. |
+| `nestMiddleware()` | Creates project-aware Nest middleware for Express-backed HTTP apps. |
+| `nestInterceptor()` | Creates a Nest-style interceptor helper for response-value extraction. |
 | `wrapHandler(handler)` | Wraps Lambda-style handlers with event lifecycle, error capture, and flush. |
 | `fetchHandler(request, ctx, handler)` | Edge request lifecycle helper. |
 | `annotate(attributes, options?)` | Adds structured fields to the active event. |
+| `annotateProject(fields, options?)` | Adds typed project fields to the active event for project-scoped storage. |
 | `push(key, value)` | Appends nested values, useful for repeated operations like DB calls. |
 | `recordError(error, options?)` | Records an error on the active event. |
 | `current()` | Returns the current materialized event, if one is active. |

@@ -94,6 +94,21 @@ describe("compileStructuredQuery", () => {
     expect(compiled.sql).toContain("ORDER BY `p95_ms` DESC");
     expect(compiled.params).toEqual(["api"]);
   });
+
+  it("targets project_events when requested", () => {
+    const compiled = compileStructuredQuery({
+      source: "project_events",
+      select: [{ fn: "COUNT", as: "total" }],
+      filters: [{ field: "project_id", op: "eq", value: "project_123" }],
+      groupBy: ["project_id"],
+      scope: "all",
+    });
+
+    expect(compiled.sql).toContain("FROM project_events");
+    expect(compiled.sql).toContain('WHERE "project_id" = ?');
+    expect(compiled.sql).toContain('GROUP BY "project_id"');
+    expect(compiled.params).toEqual(["project_123"]);
+  });
 });
 
 describe("assertReadOnlySql", () => {

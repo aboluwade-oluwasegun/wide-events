@@ -96,6 +96,191 @@ describe("WideEvents node SDK", () => {
     );
   });
 
+  it("exports project events for explicit project ids", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const wide = new WideEvents({
+      serviceName: "payments",
+      environment: "prod",
+      collectorUrl: "http://collector.test",
+      fetchImpl,
+      projects: ["project_static"],
+    });
+    const handler = wide.wrapHandler(async () => {
+      wide.annotateProject({
+        "order.total": 42.5,
+        "cart.item_count": 2,
+      });
+      return { statusCode: 201, body: "ok" };
+    });
+
+    await handler(
+      {
+        rawPath: "/checkout",
+        requestContext: { http: { method: "POST" } },
+      },
+      {},
+    );
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(body.events).toHaveLength(1);
+    expect(body.events[0]).toEqual(
+      expect.objectContaining({
+        project_id: "project_static",
+        "service.name": "payments",
+        "service.environment": "prod",
+        "http.route": "/checkout",
+        "http.status_code": 201,
+        project_fields: {
+          "cart.item_count": 2,
+          "order.total": 42.5,
+        },
+        project_field_types: {
+          "cart.item_count": "BIGINT",
+          "order.total": "DOUBLE",
+        },
+      }),
+    );
+  });
+
+  it("fetches collector project routing config for projects=true", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ttl_seconds: 60,
+            projects: [
+              {
+                project_id: "project_live",
+                project_rule_version: "rules-v3",
+                service_name: "payments",
+                environment: "prod",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(new Response("", { status: 202 }));
+    const wide = new WideEvents({
+      serviceName: "payments",
+      environment: "prod",
+      collectorUrl: "http://collector.test/",
+      fetchImpl,
+      projects: true,
+    });
+    const handler = wide.wrapHandler(async () => {
+      wide.annotateProject({
+        "checkout.converted": true,
+      });
+      return { statusCode: 200, body: "ok" };
+    });
+
+    await handler(
+      {
+        rawPath: "/checkout",
+        requestContext: { http: { method: "POST" } },
+      },
+      {},
+    );
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(
+      "http://collector.test/v1/projects/config?serviceName=payments&serviceEnvironment=prod",
+    );
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
+    expect(body.events[0]).toEqual(
+      expect.objectContaining({
+        project_id: "project_live",
+        project_rule_version: "rules-v3",
+        project_fields: {
+          "checkout.converted": true,
+        },
+        project_field_types: {
+          "checkout.converted": "BOOLEAN",
+        },
+      }),
+    );
+  });
+
+  it("rejects project events outside the configured explicit project ids", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const wide = new WideEvents({
+      serviceName: "payments",
+      collectorUrl: "http://collector.test",
+      fetchImpl,
+      projects: ["project_a"],
+    });
+    const handler = wide.wrapHandler(async () => {
+      wide.annotateProject(
+        {
+          "order.total": 42.5,
+        },
+        { projectId: "project_b" },
+      );
+      return { statusCode: 200, body: "ok" };
+    });
+
+    await expect(handler({}, {})).rejects.toThrow(
+      'Project "project_b" is not configured for this SDK instance',
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fetches configured project extraction rules without middleware wiring", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          version: 1,
+          rules: [
+            {
+              project_id: "project_checkout",
+              project_rule_version: "rules-v1",
+              match: {
+                method: "POST",
+                path: "/checkout",
+              },
+              fields: [
+                {
+                  field: "order.total",
+                  source: "response.body",
+                  path: "total",
+                  type: "DOUBLE",
+                },
+              ],
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    const wide = new WideEvents({
+      serviceName: "payments",
+      projectRules: {
+        url: "https://cdn.example.com/wide-events/project-rules.json",
+        refreshIntervalMs: 30_000,
+      },
+      fetchImpl,
+    });
+
+    await expect(wide.getProjectRules()).resolves.toEqual([
+      expect.objectContaining({
+        project_id: "project_checkout",
+        project_rule_version: "rules-v1",
+      }),
+    ]);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://cdn.example.com/wide-events/project-rules.json",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
   it("records fetch failures automatically", async () => {
     const wide = new WideEvents({ serviceName: "payments" });
     const wrapped = wide.wrapFetch(vi.fn<typeof fetch>().mockRejectedValue(new Error("offline")));

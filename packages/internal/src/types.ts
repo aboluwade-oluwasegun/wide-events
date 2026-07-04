@@ -9,7 +9,20 @@ export type EventValue =
 
 export type DynamicEventAttributes = Record<string, EventValue>;
 
-export interface StoredEventRow {
+export type InferredAttributeType =
+  | "BOOLEAN"
+  | "BIGINT"
+  | "DOUBLE"
+  | "VARCHAR"
+  | "JSON";
+
+export type ProjectFieldType = InferredAttributeType;
+
+export type ProjectFields = Record<string, EventValue>;
+
+export type ProjectFieldTypes = Record<string, ProjectFieldType>;
+
+export interface EventRowBase {
   event_id: string;
   correlation_id: string;
   parent_event_id: string | null;
@@ -28,8 +41,30 @@ export interface StoredEventRow {
   "user.id": string | null;
   "user.type": string | null;
   "user.org.id": string | null;
+}
+
+export interface StoredEventRow extends EventRowBase {
   attributes_overflow: DynamicEventAttributes;
   promoted_attribute_hints: string[];
+}
+
+export interface ProjectEventRow extends EventRowBase {
+  project_id: string;
+  project_rule_version: string | null;
+  project_fields: ProjectFields;
+  project_field_types: ProjectFieldTypes;
+}
+
+export interface ProjectRoutingConfig {
+  project_id: string;
+  project_rule_version: string;
+  service_name: string | null;
+  environment: string | null;
+}
+
+export interface ProjectRoutingConfigResponse {
+  ttl_seconds: number;
+  projects: ProjectRoutingConfig[];
 }
 
 export interface WideEvent {
@@ -53,6 +88,10 @@ export interface WideEvent {
   "user.id"?: string | null | undefined;
   "user.type"?: string | null | undefined;
   "user.org.id"?: string | null | undefined;
+  project_id?: string | undefined;
+  project_rule_version?: string | undefined;
+  project_fields?: ProjectFields | undefined;
+  project_field_types?: ProjectFieldTypes | undefined;
   attributes?: DynamicEventAttributes | undefined;
   promote?: string[] | undefined;
 }
@@ -103,6 +142,8 @@ export interface QueryOrderBy {
 
 export type QueryScope = "main" | "all";
 
+export type QuerySource = "events" | "project_events";
+
 export interface StructuredQuery {
   select: readonly QuerySelectItem[];
   filters?: readonly QueryFilter[] | undefined;
@@ -111,6 +152,7 @@ export interface StructuredQuery {
   orderBy?: QueryOrderBy | undefined;
   limit?: number | undefined;
   scope?: QueryScope | undefined;
+  source?: QuerySource | undefined;
 }
 
 export type QueryRow = Record<string, EventValue>;
@@ -121,12 +163,13 @@ export interface QueryResult {
 
 export interface ColumnInfo {
   name: string;
-  storageState: "baseline" | "overflow_only" | "promoted" | "failed";
+  storageState: "baseline" | "overflow_only" | "promoted" | "project" | "failed";
   queryable: boolean;
   inferredType: string | null;
   promotedType: string | null;
   seenRows: number;
   lastSeenAt: string | null;
+  source?: QuerySource | undefined;
 }
 
 export interface EventsResult {
@@ -139,13 +182,6 @@ export type PromotionStorageState =
   | "promoting"
   | "promoted"
   | "failed";
-
-export type InferredAttributeType =
-  | "BOOLEAN"
-  | "BIGINT"
-  | "DOUBLE"
-  | "VARCHAR"
-  | "JSON";
 
 export interface AttributeCatalogEntry {
   key: string;

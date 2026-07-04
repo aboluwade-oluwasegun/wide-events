@@ -3,12 +3,26 @@ import {
   normalizeEventPrimitive,
   type DynamicEventAttributes,
   type EventValue,
+  type ProjectFieldTypes,
+  type ProjectFields,
   type WideEvent,
 } from "@wide-events/internal";
 import { normalizeAttributes, type AnnotateOptions, type AnnotationAttributes } from "./attributes.js";
 import { wrapFetch as wrapFetchInstrumentation } from "./instrumentation/fetch.js";
 import { postJson } from "./http.js";
 import { createCorrelationId, createEventId } from "./ids.js";
+import {
+  ProjectRulesManager,
+  type ProjectExtractionRule,
+  type ProjectRulesConfig,
+} from "./project-rules.js";
+import type { ProjectExtractionMetadata } from "./project-extraction.js";
+import {
+  ProjectRoutingManager,
+  type AnnotateProjectOptions,
+  type ProjectAnnotationFields,
+  type ProjectRoutingOption,
+} from "./projects.js";
 
 export interface WideEventContext {
   event: WideEvent;
@@ -33,6 +47,8 @@ export interface CoreWideEventsOptions {
   sampleRate: number;
   disabled: boolean;
   batchSize: number;
+  projects: ProjectRoutingOption;
+  projectRules?: ProjectRulesConfig | undefined;
   fetchImpl?: typeof fetch | undefined;
   sink?: WideEventSink | undefined;
 }
@@ -44,6 +60,8 @@ export interface RecordErrorOptions {
 
 export class CoreWideEvents {
   private readonly fetchImpl: typeof fetch;
+  private readonly projectRouting: ProjectRoutingManager;
+  private readonly projectRules: ProjectRulesManager;
   private readonly queue: WideEvent[] = [];
   private patchedFetch: typeof fetch | null = null;
 
@@ -52,6 +70,17 @@ export class CoreWideEvents {
     private readonly storage: ContextStorage,
   ) {
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.projectRouting = new ProjectRoutingManager({
+      projects: options.projects,
+      collectorUrl: options.collectorUrl,
+      serviceName: options.serviceName,
+      environment: options.environment,
+      fetchImpl: this.fetchImpl,
+    });
+    this.projectRules = new ProjectRulesManager({
+      projectRules: options.projectRules,
+      fetchImpl: this.fetchImpl,
+    });
   }
 
   createContext(initial: Partial<WideEvent> = {}): WideEventContext {
@@ -73,6 +102,10 @@ export class CoreWideEvents {
         "http.request.method": initial["http.request.method"] ?? null,
         error: initial.error ?? null,
         "exception.slug": initial["exception.slug"] ?? null,
+        project_id: initial.project_id,
+        project_rule_version: initial.project_rule_version,
+        project_fields: initial.project_fields,
+        project_field_types: initial.project_field_types,
       },
       attributes: { ...(initial.attributes ?? {}) },
       promote: new Set(initial.promote ?? []),
@@ -115,6 +148,51 @@ export class CoreWideEvents {
       }
       context.promote.add(key);
     }
+  }
+
+  annotateProject<TFields extends ProjectAnnotationFields>(
+    fields: TFields,
+    options?: AnnotateProjectOptions<TFields>,
+  ): void {
+    const context = this.storage.getStore();
+    if (!context || this.options.disabled) {
+      return;
+    }
+
+    const annotation = this.projectRouting.prepareProjectAnnotation(fields, options);
+    context.event.project_id = annotation.project_id ?? context.event.project_id;
+    context.event.project_rule_version =
+      annotation.project_rule_version ?? context.event.project_rule_version;
+    context.event.project_fields = {
+      ...(context.event.project_fields ?? {}),
+      ...annotation.project_fields,
+    };
+    context.event.project_field_types = {
+      ...(context.event.project_field_types ?? {}),
+      ...annotation.project_field_types,
+    };
+  }
+
+  async getProjectRules(): Promise<readonly ProjectExtractionRule[]> {
+    return await this.projectRules.getRules();
+  }
+
+  applyProjectMetadata(metadata: ProjectExtractionMetadata): void {
+    const context = this.storage.getStore();
+    if (!context || this.options.disabled) {
+      return;
+    }
+
+    context.event.project_id = metadata.project_id;
+    context.event.project_rule_version = metadata.project_rule_version;
+    context.event.project_fields = {
+      ...(context.event.project_fields ?? {}),
+      ...(metadata.project_fields ?? {}),
+    };
+    context.event.project_field_types = {
+      ...(context.event.project_field_types ?? {}),
+      ...(metadata.project_field_types ?? {}),
+    };
   }
 
   push(key: string, value: EventValue): void {
@@ -183,8 +261,9 @@ export class CoreWideEvents {
     }
 
     const events = this.queue.splice(0, this.queue.length);
+    const preparedEvents = await this.projectRouting.prepareEvents(events);
     if (this.options.sink) {
-      await this.options.sink.write(events);
+      await this.options.sink.write(preparedEvents);
       return;
     }
 
@@ -195,7 +274,7 @@ export class CoreWideEvents {
     await postJson(
       this.fetchImpl,
       `${this.options.collectorUrl.replace(/\/$/u, "")}/v1/events`,
-      { events },
+      { events: preparedEvents },
     );
   }
 
@@ -298,10 +377,51 @@ function setField(context: WideEventContext, key: string, value: EventValue): vo
     case "error":
       context.event.error = typeof value === "boolean" ? value : null;
       break;
+    case "project_id":
+      context.event.project_id = typeof value === "string" ? value : undefined;
+      break;
+    case "project_rule_version":
+      context.event.project_rule_version = typeof value === "string" ? value : undefined;
+      break;
+    case "project_fields":
+      context.event.project_fields = toProjectFields(value);
+      break;
+    case "project_field_types":
+      context.event.project_field_types = toProjectFieldTypes(value);
+      break;
     default:
       context.attributes[key] = value;
       break;
   }
+}
+
+function toProjectFields(value: EventValue): ProjectFields | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as ProjectFields;
+}
+
+function toProjectFieldTypes(value: EventValue): ProjectFieldTypes | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const fieldTypes: ProjectFieldTypes = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (
+      entry === "BOOLEAN" ||
+      entry === "BIGINT" ||
+      entry === "DOUBLE" ||
+      entry === "VARCHAR" ||
+      entry === "JSON"
+    ) {
+      fieldTypes[key] = entry;
+    }
+  }
+
+  return fieldTypes;
 }
 
 function normalizeError(

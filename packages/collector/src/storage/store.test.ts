@@ -1,13 +1,18 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { DynamicEventAttributes, StoredEventRow } from "@wide-events/internal";
+import type {
+  DynamicEventAttributes,
+  ProjectEventRow,
+  StoredEventRow,
+} from "@wide-events/internal";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CollectorConfig } from "../config";
 import { QueueLimitExceededError } from "../errors";
 import type { CollectorLogger } from "../logger";
 import { AttributeCatalog } from "./attribute-catalog";
 import { DuckDbDatabase } from "./duckdb";
+import { ProjectSchemaRegistry } from "./project-schema-registry";
 import { SchemaRegistry } from "./schema-registry";
 import { CollectorStore } from "./store";
 
@@ -18,6 +23,7 @@ interface LoggedEvent {
 
 interface StoreHarness {
   catalog: AttributeCatalog;
+  projectSchema: ProjectSchemaRegistry;
   schema: SchemaRegistry;
   store: CollectorStore;
 }
@@ -49,6 +55,40 @@ function createRow(
     "user.org.id": null,
     attributes_overflow: attributes,
     promoted_attribute_hints: promotedAttributeHints,
+  };
+}
+
+function createProjectRow(
+  suffix: string,
+  fields: DynamicEventAttributes = {
+    "order.total": 42.5,
+  },
+): ProjectEventRow {
+  return {
+    correlation_id: `corr-${suffix}`,
+    event_id: `event-${suffix}`,
+    parent_event_id: null,
+    ts: "2024-01-01T00:00:00.000Z",
+    duration_ms: 10,
+    main: true,
+    sample_rate: 1,
+    "service.name": "payments",
+    "service.environment": "test",
+    "service.version": null,
+    "http.route": "/checkout",
+    "http.status_code": 200,
+    "http.request.method": "GET",
+    error: false,
+    "exception.slug": null,
+    "user.id": "user-123",
+    "user.type": null,
+    "user.org.id": null,
+    project_id: "project_123",
+    project_rule_version: "2026-07-01",
+    project_fields: fields,
+    project_field_types: Object.fromEntries(
+      Object.keys(fields).map((key) => [key, "DOUBLE"]),
+    ),
   };
 }
 
@@ -101,11 +141,20 @@ describe("CollectorStore", () => {
     const config = configOverrides(overrides);
     const schema = new SchemaRegistry(config.maxPromotedColumns);
     await schema.hydrate(database);
+    const projectSchema = new ProjectSchemaRegistry();
+    await projectSchema.hydrate(database);
     const catalog = new AttributeCatalog();
     await catalog.hydrate(database);
-    const store = new CollectorStore(database, schema, catalog, config, logger);
+    const store = new CollectorStore(
+      database,
+      schema,
+      projectSchema,
+      catalog,
+      config,
+      logger,
+    );
 
-    return { catalog, schema, store };
+    return { catalog, projectSchema, schema, store };
   }
 
   it("flushes when the batch size is reached", async () => {
@@ -192,6 +241,59 @@ describe("CollectorStore", () => {
     });
     expect(warns).toHaveLength(0);
   });
+
+  it("stores project events separately from default events", async () => {
+    const { catalog, store } = await createStoreHarness({
+      batchSize: 2,
+      batchTimeoutMs: 5_000,
+    });
+
+    await store.enqueueIngestBatch({
+      defaultRows: [
+        createRow("default", {
+          "custom.value": "alpha",
+        }),
+      ],
+      projectRows: [createProjectRow("project")],
+    });
+
+    const defaultRows = await database.executeRead(
+      "SELECT event_id, attributes_overflow FROM events WHERE event_id = ?",
+      ["event-default"],
+    );
+    const projectRows = await database.executeRead(
+      "SELECT event_id, project_id, project_rule_version, project_fields, project_field_types, \"order.total\" AS order_total FROM project_events WHERE event_id = ?",
+      ["event-project"],
+    );
+
+    expect(defaultRows).toEqual([
+      {
+        event_id: "event-default",
+        attributes_overflow: {
+          "custom.value": "alpha",
+        },
+      },
+    ]);
+    expect(projectRows).toEqual([
+      {
+        event_id: "event-project",
+        project_id: "project_123",
+        project_rule_version: "2026-07-01",
+        project_fields: {
+          "order.total": 42.5,
+        },
+          project_field_types: {
+            "order.total": "DOUBLE",
+          },
+          order_total: 42.5,
+        },
+      ]);
+      const projectColumns = await database.readColumns("project_events");
+      expect(projectColumns.some((column) => column.name === "order.total")).toBe(
+        true,
+      );
+      expect(catalog.getEntry("order.total")).toBeNull();
+    });
 
   it("promotes eligible overflow keys and writes subsequent rows to the promoted column", async () => {
     const { store } = await createStoreHarness({
@@ -452,6 +554,8 @@ function configOverrides(
     promotionMinRatio: 0.01,
     promotionMaxKeysPerRun: 1,
     queueLimit: 10_000,
+    projectConfigTtlSeconds: 60,
+    projects: [],
     ...overrides,
   };
 }

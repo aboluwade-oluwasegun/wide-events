@@ -11,11 +11,17 @@ export function buildDuckDbInsertSql(
   rowCount: number,
 ): string {
   const placeholders = Array.from({ length: rowCount }, () => {
-    const rowPlaceholders = columns.map((column) =>
-      column === "attributes_overflow"
-        ? "CAST(CAST(? AS JSON) AS MAP(VARCHAR, JSON))"
-        : "?",
-    );
+    const rowPlaceholders = columns.map((column) => {
+      if (column === "attributes_overflow" || column === "project_fields") {
+        return "CAST(CAST(? AS JSON) AS MAP(VARCHAR, JSON))";
+      }
+
+      if (column === "project_field_types") {
+        return "CAST(CAST(? AS JSON) AS MAP(VARCHAR, VARCHAR))";
+      }
+
+      return "?";
+    });
     return `(${rowPlaceholders.join(", ")})`;
   }).join(", ");
 

@@ -8,6 +8,17 @@ WIDE_EVENTS_COLLECTOR_URL=http://localhost:4318 pnpm --filter wide-events-exampl
 
 The example creates one main event per request, annotates `http.route`, and exports native JSON to `POST /v1/events`.
 
+## Project rules Express example
+
+[`src/project-rules-express.ts`](src/project-rules-express.ts) shows the project-rules middleware flow for an Express-shaped app:
+
+1. Publish a `ProjectRulesDocument` JSON file to a CDN or static asset host.
+2. Configure the SDK with `projects: ["project_checkout"]` and `projectRules.url`.
+3. Install `wideEvents.expressMiddleware()`.
+4. Let the middleware extract request and response fields into `project_events`; the route handler does not call `annotateProject()`.
+
+The exported `checkoutProjectRules` constant is checked against the SDK `ProjectRulesDocument` type, so the example stays aligned with the JSON format accepted by the SDK poller.
+
 ## DynamoDB helper
 
 [`src/dynamodb-query.ts`](src/dynamodb-query.ts) shows the same ordering used by the constructor-based instrumentation API:

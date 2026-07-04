@@ -20,7 +20,7 @@ describe("ClickHouseDatabase", () => {
       application: "wide-events-collector",
     });
     expect(client.ping).toHaveBeenCalledTimes(1);
-    expect(client.command).toHaveBeenCalledTimes(3);
+    expect(client.command).toHaveBeenCalledTimes(4);
     expect(client.command.mock.calls[0]?.[0].query).toBe(
       "CREATE DATABASE IF NOT EXISTS `wide_events`",
     );
@@ -186,6 +186,70 @@ WHERE isNull(\`custom.count\`)
     });
   });
 
+  it("inserts project event rows into the project_events table", async () => {
+    const client = createMockClickHouseClient();
+    const database = await ClickHouseDatabase.create(
+      createClickHouseConfig(),
+      () => client,
+    );
+
+    await database.insertProjectEventRows(
+      [
+        "event_id",
+        "correlation_id",
+        "ts",
+        "project_id",
+        "project_fields",
+        "project_field_types",
+      ],
+      [
+        {
+          event_id: "event-project",
+          correlation_id: "corr-project",
+          ts: "2024-01-01T00:00:00.000Z",
+          project_id: "project_123",
+          project_fields: {
+            "order.total": 42.5,
+            "payload.raw": { sku: "sku_123" },
+          },
+          project_field_types: {
+            "order.total": "DOUBLE",
+            "payload.raw": "JSON",
+          },
+        },
+      ],
+    );
+
+    expect(client.insert).toHaveBeenCalledWith({
+      table: "`wide_events`.`project_events`",
+      columns: [
+        "`event_id`",
+        "`correlation_id`",
+        "`ts`",
+        "`project_id`",
+        "`project_fields`",
+        "`project_field_types`",
+      ],
+      values: [
+        [
+          "event-project",
+          "corr-project",
+          "2024-01-01T00:00:00.000Z",
+          "project_123",
+          {
+            "order.total": "42.5",
+            "payload.raw": "{\"sku\":\"sku_123\"}",
+          },
+          {
+            "order.total": "DOUBLE",
+            "payload.raw": "JSON",
+          },
+        ],
+      ],
+      format: "JSONCompactEachRow",
+    });
+  });
+
   it("appends attribute catalog versions for ReplacingMergeTree", async () => {
     const client = createMockClickHouseClient();
     const database = await ClickHouseDatabase.create(
@@ -300,9 +364,16 @@ WHERE isNull(\`custom.count\`)
     await database.deleteEventsBefore("2024-01-01T00:00:00.000Z");
     await database.runRetentionMaintenance();
 
-    expect(client.command).toHaveBeenCalledTimes(1);
-    expect(client.command).toHaveBeenCalledWith({
+    expect(client.command).toHaveBeenCalledTimes(2);
+    expect(client.command.mock.calls[0]?.[0]).toEqual({
       query: `ALTER TABLE \`wide_events\`.\`events\`
+DELETE WHERE \`ts\` < parseDateTime64BestEffort({cutoff:String}, 3, 'UTC')`,
+      query_params: {
+        cutoff: "2024-01-01T00:00:00.000Z",
+      },
+    });
+    expect(client.command.mock.calls[1]?.[0]).toEqual({
+      query: `ALTER TABLE \`wide_events\`.\`project_events\`
 DELETE WHERE \`ts\` < parseDateTime64BestEffort({cutoff:String}, 3, 'UTC')`,
       query_params: {
         cutoff: "2024-01-01T00:00:00.000Z",
@@ -369,5 +440,7 @@ function createClickHouseConfig(): Extract<CollectorConfig, { storage: "clickhou
     promotionMinRatio: 0.01,
     promotionMaxKeysPerRun: 1,
     queueLimit: 10_000,
+    projectConfigTtlSeconds: 60,
+    projects: [],
   };
 }

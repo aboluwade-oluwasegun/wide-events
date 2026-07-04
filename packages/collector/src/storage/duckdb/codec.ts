@@ -39,7 +39,11 @@ export function serializeDuckDbInsertValue(
   column: string,
   value: unknown,
 ): unknown {
-  if (column === "attributes_overflow") {
+  if (
+    column === "attributes_overflow" ||
+    column === "project_fields" ||
+    column === "project_field_types"
+  ) {
     return JSON.stringify(value ?? {});
   }
 

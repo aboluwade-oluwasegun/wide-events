@@ -15,6 +15,7 @@ import { WideEventsClient } from "@wide-events/client";
 
 const client = new WideEventsClient({ url: "http://localhost:4318" });
 const columns = await client.getColumns();
+const projectColumns = await client.getColumns("project_events");
 ```
 
 ## API
@@ -23,7 +24,7 @@ const columns = await client.getColumns();
 | --- | --- |
 | `query(request)` | Executes a structured query through `POST /query`. |
 | `sql(queryText)` | Executes read-only SQL through `POST /sql`. |
-| `getColumns()` | Returns collector schema metadata from `GET /columns`. |
+| `getColumns(source?)` | Returns collector schema metadata from `GET /columns`, or project columns from `GET /columns?source=project_events`. |
 | `getEvents(correlationId)` | Returns all rows for a correlation id from `GET /events/:correlationId`. |
 
 ## Structured query DSL
@@ -74,6 +75,11 @@ const result = await client.query({
 - `"all"` queries all stored events.
 
 Use `"all"` for event-level drill-down. Leave it at the default for product-style wide-event queries.
+
+`StructuredQuery` also supports `source?: "events" | "project_events"`.
+
+- Omitted `source` defaults to `"events"`.
+- `"project_events"` targets project-scoped events and validates filters, groups, and selected fields against the project event table columns.
 
 ## Raw SQL
 

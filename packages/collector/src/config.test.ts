@@ -53,6 +53,52 @@ describe("readCollectorConfig", () => {
     });
   });
 
+  it("parses project registry env", () => {
+    const config = readCollectorConfig({
+      WIDE_EVENTS_DUCKDB_PATH: "./wide-events.db",
+      WIDE_EVENTS_PROJECT_CONFIG_TTL_SECONDS: "120",
+      WIDE_EVENTS_PROJECTS: JSON.stringify([
+        {
+          projectId: "project_checkout",
+          serviceName: "checkout",
+          environment: "prod",
+          ruleVersion: "2026-07-01"
+        },
+        {
+          projectId: "project_inactive",
+          active: false
+        }
+      ])
+    });
+
+    expect(config.projectConfigTtlSeconds).toBe(120);
+    expect(config.projects).toEqual([
+      {
+        projectId: "project_checkout",
+        serviceName: "checkout",
+        environment: "prod",
+        active: true,
+        ruleVersion: "2026-07-01"
+      },
+      {
+        projectId: "project_inactive",
+        serviceName: null,
+        environment: null,
+        active: false,
+        ruleVersion: "1"
+      }
+    ]);
+  });
+
+  it("rejects invalid project registry env", () => {
+    expect(() =>
+      readCollectorConfig({
+        WIDE_EVENTS_DUCKDB_PATH: "./wide-events.db",
+        WIDE_EVENTS_PROJECTS: "not-json"
+      })
+    ).toThrow(/WIDE_EVENTS_PROJECTS must be valid JSON/);
+  });
+
   it("defaults the ClickHouse username when omitted", () => {
     const config = readCollectorConfig({
       WIDE_EVENTS_STORAGE: "clickhouse",

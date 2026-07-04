@@ -64,6 +64,7 @@ function createMockDatabase(): CollectorDatabase {
     async addPromotedColumn() {},
     async backfillPromotedColumn() {},
     async insertEventRows() {},
+    async insertProjectEventRows() {},
     async loadAttributeCatalog() {
       return [];
     },
@@ -93,6 +94,8 @@ function createDuckDbConfig(
     promotionMinRatio: 0.01,
     promotionMaxKeysPerRun: 1,
     queueLimit: 10_000,
+    projectConfigTtlSeconds: 60,
+    projects: [],
     ...overrides
   };
 }
@@ -114,6 +117,8 @@ function createClickHouseConfig(): CollectorConfig {
     promotionMinRows: 1_000,
     promotionMinRatio: 0.01,
     promotionMaxKeysPerRun: 1,
-    queueLimit: 10_000
+    queueLimit: 10_000,
+    projectConfigTtlSeconds: 60,
+    projects: []
   };
 }

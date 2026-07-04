@@ -4,6 +4,7 @@ import {
   type EventPrimitive,
   type QueryFilter,
   type QuerySelectItem,
+  type QuerySource,
   type StructuredQuery
 } from "@wide-events/internal";
 import { BadRequestError } from "../errors.js";
@@ -33,6 +34,7 @@ export function compileStructuredQuery(
     const params: EventPrimitive[] = [];
     const whereParts: string[] = [];
     const scope = query.scope ?? "main";
+    const source = query.source ?? "events";
     const filters = [...(query.filters ?? [])];
     const groupByFields = (query.groupBy ?? []).map(sanitizeIdentifier);
     const selectParts = [
@@ -77,7 +79,7 @@ export function compileStructuredQuery(
         : "";
 
     const sql =
-      `SELECT ${selectSql} FROM events` +
+      `SELECT ${selectSql} FROM ${querySourceTable(source)}` +
       (whereParts.length > 0 ? ` WHERE ${whereParts.join(" AND ")}` : "") +
       (groupBy.length > 0 ? ` GROUP BY ${groupBy.join(", ")}` : "") +
       orderBy +
@@ -94,6 +96,17 @@ export function compileStructuredQuery(
     }
 
     throw error;
+  }
+}
+
+function querySourceTable(source: QuerySource): string {
+  switch (source) {
+    case "events":
+      return "events";
+    case "project_events":
+      return "project_events";
+    default:
+      return assertNever(source);
   }
 }
 
@@ -197,4 +210,8 @@ function requireField(select: QuerySelectItem): string {
 
 function sanitizeFilterField(filter: QueryFilter): string {
   return sanitizeIdentifier(filter.field);
+}
+
+function assertNever(value: never): never {
+  throw new BadRequestError(`Unsupported query source: ${String(value)}`);
 }

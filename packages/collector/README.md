@@ -50,11 +50,26 @@ Accepts native structured event JSON:
 
 Known baseline fields are stored as typed columns. Unknown fields and `attributes` entries land in `attributes_overflow`. Primitive fields listed in `promote` are promoted into typed columns.
 
+Project-scoped events include `project_id`, `project_fields`, and `project_field_types`.
+The collector accepts them only when `project_id` is registered and active in `WIDE_EVENTS_PROJECTS`; accepted project events are stored in `project_events`, separate from the default `events` table.
+
+Project events do not use the default promotion/catalog path. On ingest, the collector reads `project_field_types`, adds missing typed columns to `project_events`, and writes each `project_fields` entry into the matching typed column. Default events without project metadata continue to route only to `events`.
+
+### `GET /v1/projects/config`
+
+Returns active project routing config for SDK refresh flows:
+
+```bash
+curl "http://localhost:4318/v1/projects/config?serviceName=orders-api&serviceEnvironment=prod"
+```
+
+This is a read-only config endpoint. The collector does not provide project create, update, or delete APIs in v1; define project registry entries with `WIDE_EVENTS_PROJECTS` when the collector starts.
+
 ## Query
 
 ### `POST /query`
 
-Structured queries target baseline and promoted columns:
+Structured queries target default events unless `source` is set:
 
 ```json
 {
@@ -65,6 +80,20 @@ Structured queries target baseline and promoted columns:
 ```
 
 `scope` defaults to `"main"`, which applies `main = true`. Set `scope: "all"` to query all stored events.
+
+Use `source: "project_events"` to query project-scoped events and their typed project field columns:
+
+```json
+{
+  "source": "project_events",
+  "select": [{ "fn": "SUM", "field": "order.total", "as": "total" }],
+  "filters": [{ "field": "project_id", "op": "eq", "value": "project_checkout" }],
+  "groupBy": ["project_id"],
+  "scope": "all"
+}
+```
+
+Project queries are validated against the actual `project_events` table columns. Unknown project fields are rejected until they have been observed and added during project-event ingest.
 
 ### `POST /sql`
 
@@ -81,6 +110,8 @@ Returns all events for a correlation id in timestamp order.
 ### `GET /columns`
 
 Lists baseline, overflow-only, promoted, and failed columns.
+
+Use `GET /columns?source=project_events` to list queryable project event columns, including typed project fields observed during ingest.
 
 ## Configuration
 
@@ -111,3 +142,25 @@ Optional:
 - `WIDE_EVENTS_PROMOTION_MIN_RATIO`: default `0.01`
 - `WIDE_EVENTS_PROMOTION_MAX_KEYS_PER_RUN`: default `25`
 - `WIDE_EVENTS_QUEUE_LIMIT`: default `10000`
+- `WIDE_EVENTS_PROJECT_CONFIG_TTL_SECONDS`: default `60`
+- `WIDE_EVENTS_PROJECTS`: JSON array of project registry entries. Example:
+
+```json
+[
+  {
+    "projectId": "project_checkout",
+    "serviceName": "orders-api",
+    "environment": "prod",
+    "ruleVersion": "2026-07-01",
+    "active": true
+  }
+]
+```
+
+Project registry fields:
+
+- `projectId`: required stable project identifier; incoming `project_id` must match one active entry.
+- `serviceName`: optional service constraint. Use `null` to accept any service.
+- `environment`: optional environment constraint. Use `null` to accept any environment.
+- `ruleVersion`: fallback `project_rule_version` when an incoming project event omits one.
+- `active`: set `false` to keep a project configured but reject new project events.

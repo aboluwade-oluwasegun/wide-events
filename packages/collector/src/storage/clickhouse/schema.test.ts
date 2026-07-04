@@ -24,6 +24,7 @@ describe("ClickHouse schema and client config", () => {
     expect(statements.map((statement) => statement.label)).toEqual([
       "database",
       "events table",
+      "project events table",
       "attribute catalog table",
     ]);
     expect(statements[0]?.query).toBe(
@@ -48,7 +49,25 @@ describe("ClickHouse schema and client config", () => {
       "ORDER BY (`ts`, `service.name`, `correlation_id`, `event_id`)",
     );
 
-    const catalogTable = statements[2]?.query ?? "";
+    const projectEventsTable = statements[2]?.query ?? "";
+    expect(projectEventsTable).toContain(
+      "CREATE TABLE IF NOT EXISTS `wide_events`.`project_events`",
+    );
+    expect(projectEventsTable).toContain("`project_id` String");
+    expect(projectEventsTable).toContain(
+      "`project_rule_version` Nullable(String)",
+    );
+    expect(projectEventsTable).toContain(
+      "`project_fields` Map(String, String) DEFAULT map()",
+    );
+    expect(projectEventsTable).toContain(
+      "`project_field_types` Map(String, String) DEFAULT map()",
+    );
+    expect(projectEventsTable).toContain(
+      "ORDER BY (`ts`, `project_id`, `service.name`, `correlation_id`, `event_id`)",
+    );
+
+    const catalogTable = statements[3]?.query ?? "";
     expect(catalogTable).toContain(
       "CREATE TABLE IF NOT EXISTS `wide_events`.`attribute_catalog`",
     );
@@ -72,6 +91,9 @@ describe("ClickHouse schema and client config", () => {
     expect(toClickHouseColumnType("INTEGER", false)).toBe("Int32");
     expect(toClickHouseColumnType("BIGINT", false)).toBe("Int64");
     expect(toClickHouseColumnType("JSON", false)).toBe("String");
+    expect(toClickHouseColumnType("MAP(VARCHAR, VARCHAR)", false)).toBe(
+      "Map(String, String)",
+    );
   });
 
   it("runs schema initialization commands in dependency order", async () => {
@@ -79,7 +101,7 @@ describe("ClickHouse schema and client config", () => {
 
     await initializeClickHouseSchema({ command }, "wide_events");
 
-    expect(command).toHaveBeenCalledTimes(3);
+    expect(command).toHaveBeenCalledTimes(4);
     expect(command.mock.calls[0]?.[0].query).toBe(
       "CREATE DATABASE IF NOT EXISTS `wide_events`",
     );
@@ -87,6 +109,9 @@ describe("ClickHouse schema and client config", () => {
       "CREATE TABLE IF NOT EXISTS `wide_events`.`events`",
     );
     expect(command.mock.calls[2]?.[0].query).toContain(
+      "CREATE TABLE IF NOT EXISTS `wide_events`.`project_events`",
+    );
+    expect(command.mock.calls[3]?.[0].query).toContain(
       "CREATE TABLE IF NOT EXISTS `wide_events`.`attribute_catalog`",
     );
   });
@@ -117,5 +142,7 @@ function createClickHouseConfig(): Extract<CollectorConfig, { storage: "clickhou
     promotionMinRatio: 0.01,
     promotionMaxKeysPerRun: 1,
     queueLimit: 10_000,
+    projectConfigTtlSeconds: 60,
+    projects: [],
   };
 }

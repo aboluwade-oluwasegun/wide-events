@@ -1,6 +1,6 @@
 import {
-  BASELINE_COLUMN_NAMES,
   BASELINE_COLUMN_TYPES,
+  isBaselineColumn,
   type InferredAttributeType,
 } from "@wide-events/internal";
 import type { CollectorDatabase } from "./types.js";
@@ -38,7 +38,7 @@ export class SchemaRegistry {
 
   promotedColumnCount(): number {
     return [...this.columns.keys()].filter(
-      (name) => !BASELINE_COLUMN_NAMES.includes(name)
+      (name) => !isBaselineColumn(name)
     ).length;
   }
 

@@ -5,6 +5,7 @@ import { resolveCollectorError } from "./errors.js";
 import type { CollectorLogger } from "./logger.js";
 import { registerColumnRoutes } from "./routes/columns.js";
 import { registerHealthRoute } from "./routes/health.js";
+import { registerProjectRoutes } from "./routes/projects.js";
 import { registerQueryRoutes } from "./routes/query.js";
 import { registerSqlRoutes } from "./routes/sql.js";
 import { registerEventQueryRoutes } from "./routes/events.js";
@@ -12,16 +13,20 @@ import { registerEventRoutes } from "./routes/v1-events.js";
 import { PromotionJob } from "./jobs/promotion.js";
 import { createCollectorDatabase } from "./storage/backend.js";
 import { AttributeCatalog } from "./storage/attribute-catalog.js";
+import { ProjectSchemaRegistry } from "./storage/project-schema-registry.js";
 import { SchemaRegistry } from "./storage/schema-registry.js";
 import { CollectorStore } from "./storage/store.js";
 import { RetentionJob } from "./jobs/retention.js";
+import { ProjectRegistry } from "./projects/registry.js";
 import type { CollectorDatabase } from "./storage/types.js";
 
 export interface CollectorDependencies {
   config: CollectorConfig;
   database: CollectorDatabase;
   schema: SchemaRegistry;
+  projectSchema: ProjectSchemaRegistry;
   catalog: AttributeCatalog;
+  projectRegistry: ProjectRegistry;
   store: CollectorStore;
   retentionJob: RetentionJob;
   promotionJob: PromotionJob;
@@ -54,22 +59,38 @@ export async function createCollectorServer(
   const database = await createCollectorDatabase(config);
   const schema = new SchemaRegistry(config.maxPromotedColumns);
   await schema.hydrate(database);
+  const projectSchema = new ProjectSchemaRegistry();
+  await projectSchema.hydrate(database);
   const catalog = new AttributeCatalog();
   await catalog.hydrate(database);
-  const store = new CollectorStore(database, schema, catalog, config, logger);
+  const projectRegistry = new ProjectRegistry(
+    config.projects,
+    config.projectConfigTtlSeconds,
+  );
+  const store = new CollectorStore(
+    database,
+    schema,
+    projectSchema,
+    catalog,
+    config,
+    logger,
+  );
   const retentionJob = new RetentionJob(store);
   const promotionJob = new PromotionJob(store, config);
   const dependencies: CollectorDependencies = {
     config,
     database,
     schema,
+    projectSchema,
     catalog,
+    projectRegistry,
     store,
     retentionJob,
     promotionJob
   };
 
   registerHealthRoute(app);
+  registerProjectRoutes(app, dependencies);
   registerEventRoutes(app, dependencies);
   registerQueryRoutes(app, dependencies);
   registerSqlRoutes(app, dependencies);

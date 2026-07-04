@@ -1,5 +1,5 @@
 import {
-  BASELINE_COLUMN_NAMES,
+  isBaselineColumn,
   sanitizeIdentifier,
   type AttributeCatalogEntry,
   type ColumnInfo,
@@ -49,7 +49,7 @@ export class AttributeCatalog {
   }
 
   getFieldStorageState(field: string): PromotionStorageState | "baseline" | "unknown" {
-    if (BASELINE_COLUMN_NAMES.includes(field)) {
+    if (isBaselineColumn(field)) {
       return "baseline";
     }
 
@@ -62,7 +62,7 @@ export class AttributeCatalog {
       .listActualColumns()
       .filter(
         (column) =>
-          BASELINE_COLUMN_NAMES.includes(column.name) &&
+          isBaselineColumn(column.name) &&
           column.name !== "attributes_overflow"
       )
       .map<ColumnInfo>((column) => ({

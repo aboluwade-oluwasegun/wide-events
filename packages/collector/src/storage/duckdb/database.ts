@@ -2,6 +2,7 @@ import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import {
   ATTRIBUTE_CATALOG_SQL,
   BASE_TABLE_SQL,
+  PROJECT_EVENTS_TABLE_SQL,
   quoteIdentifier,
   type AttributeCatalogEntry,
   type InferredAttributeType,
@@ -13,7 +14,11 @@ import {
   attributeCatalogEntryFromRow,
   attributeCatalogEntryToRow,
 } from "../attribute-catalog-row.js";
-import type { CollectorInsertRow, CollectorTableColumn } from "../types.js";
+import type {
+  CollectorDatabase,
+  CollectorInsertRow,
+  CollectorTableColumn,
+} from "../types.js";
 import {
   normalizeDuckDbRows,
   serializeDuckDbInsertValue,
@@ -26,7 +31,7 @@ import {
   readDuckDbTableColumnsSql,
 } from "./sql.js";
 
-export class DuckDbDatabase {
+export class DuckDbDatabase implements CollectorDatabase {
   readonly queryDialect = duckDbQuerySqlDialect;
 
   private constructor(
@@ -39,6 +44,7 @@ export class DuckDbDatabase {
     const writer = await instance.connect();
     const database = new DuckDbDatabase(instance, writer);
     await database.writer.run(BASE_TABLE_SQL);
+    await database.writer.run(PROJECT_EVENTS_TABLE_SQL);
     await database.writer.run(ATTRIBUTE_CATALOG_SQL);
     await database.writer.run(
       "ALTER TABLE events ADD COLUMN IF NOT EXISTS attributes_overflow MAP(VARCHAR, JSON)",
@@ -118,6 +124,27 @@ export class DuckDbDatabase {
     await this.execute(buildDuckDbInsertSql("events", columns, rows.length), values);
   }
 
+  async insertProjectEventRows(
+    columns: readonly string[],
+    rows: readonly CollectorInsertRow[],
+  ): Promise<void> {
+    if (rows.length === 0) {
+      return;
+    }
+
+    const values: unknown[] = [];
+    for (const row of rows) {
+      for (const column of columns) {
+        values.push(serializeDuckDbInsertValue(column, row[column]));
+      }
+    }
+
+    await this.execute(
+      buildDuckDbInsertSql("project_events", columns, rows.length),
+      values,
+    );
+  }
+
   async loadAttributeCatalog(): Promise<AttributeCatalogEntry[]> {
     const rows = await this.executeRead(`
       SELECT ${ATTRIBUTE_CATALOG_COLUMNS.map(quoteIdentifier).join(", ")}
@@ -136,6 +163,7 @@ export class DuckDbDatabase {
 
   async deleteEventsBefore(cutoff: string): Promise<void> {
     await this.execute("DELETE FROM events WHERE ts < ?", [cutoff]);
+    await this.execute("DELETE FROM project_events WHERE ts < ?", [cutoff]);
   }
 
   async runRetentionMaintenance(): Promise<void> {

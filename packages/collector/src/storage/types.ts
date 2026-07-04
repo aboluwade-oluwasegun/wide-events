@@ -30,6 +30,10 @@ export interface CollectorDatabase {
     columns: readonly string[],
     rows: readonly CollectorInsertRow[],
   ): Promise<void>;
+  insertProjectEventRows(
+    columns: readonly string[],
+    rows: readonly CollectorInsertRow[],
+  ): Promise<void>;
   loadAttributeCatalog(): Promise<AttributeCatalogEntry[]>;
   saveAttributeCatalogEntry(entry: AttributeCatalogEntry): Promise<void>;
   deleteEventsBefore(cutoff: string): Promise<void>;

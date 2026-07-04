@@ -46,6 +46,13 @@ function validateStructuredQueryFields(
   }
 
   for (const field of referencedFields) {
+    if (query.source === "project_events") {
+      if (dependencies.projectSchema.isQueryableColumn(field)) {
+        continue;
+      }
+      throw new BadRequestError(`Unknown project query field "${field}"`);
+    }
+
     if (dependencies.schema.isQueryableColumn(field)) {
       continue;
     }

@@ -123,6 +123,13 @@ WHERE isNull(${clickHouseQuoteIdentifier(column)})
     await this.insertRows("events", columns, rows);
   }
 
+  async insertProjectEventRows(
+    columns: readonly string[],
+    rows: readonly CollectorInsertRow[],
+  ): Promise<void> {
+    await this.insertRows("project_events", columns, rows);
+  }
+
   async loadAttributeCatalog(): Promise<AttributeCatalogEntry[]> {
     const rows = await this.queryRows({
       query: `SELECT ${ATTRIBUTE_CATALOG_COLUMNS.map(clickHouseQuoteIdentifier).join(
@@ -142,6 +149,18 @@ FROM ${clickHouseQualifiedIdentifier(this.database, "attribute_catalog")} FINAL`
   async deleteEventsBefore(cutoff: string): Promise<void> {
     await this.client.command({
       query: `ALTER TABLE ${clickHouseQualifiedIdentifier(this.database, "events")}
+DELETE WHERE ${clickHouseQuoteIdentifier(
+        "ts",
+      )} < parseDateTime64BestEffort({cutoff:String}, 3, 'UTC')`,
+      query_params: {
+        cutoff,
+      },
+    });
+    await this.client.command({
+      query: `ALTER TABLE ${clickHouseQualifiedIdentifier(
+        this.database,
+        "project_events",
+      )}
 DELETE WHERE ${clickHouseQuoteIdentifier(
         "ts",
       )} < parseDateTime64BestEffort({cutoff:String}, 3, 'UTC')`,

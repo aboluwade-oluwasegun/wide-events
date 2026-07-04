@@ -4,8 +4,12 @@ export function serializeClickHouseInsertValue(
   column: string,
   value: unknown,
 ): unknown {
-  if (column === "attributes_overflow") {
-    return serializeClickHouseOverflowMap(value);
+  if (
+    column === "attributes_overflow" ||
+    column === "project_fields" ||
+    column === "project_field_types"
+  ) {
+    return serializeClickHouseMap(value);
   }
 
   return value ?? null;
@@ -38,7 +42,7 @@ export function toNonEmptyArray<T>(values: readonly T[]): [T, ...T[]] {
   return [first, ...rest];
 }
 
-function serializeClickHouseOverflowMap(value: unknown): Record<string, string> {
+function serializeClickHouseMap(value: unknown): Record<string, string> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
