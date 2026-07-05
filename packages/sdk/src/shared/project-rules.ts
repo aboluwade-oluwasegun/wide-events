@@ -1,143 +1,51 @@
-import { z } from "zod";
 import {
-  PROJECT_EVENT_RESERVED_FIELD_NAMES,
-  type ProjectFieldType,
-} from "@wide-events/internal";
+  discoverProjectConfig,
+  parseProjectDiscoveryResponse,
+  type ActiveProjectDiscoveryResult,
+  type ProjectDiscoveryProject,
+} from "./project-discovery.js";
+import {
+  DEFAULT_PROJECT_RULE_REFRESH_INTERVAL_MS,
+  projectRulesDocumentSchema,
+  type ProjectExtractionRule,
+  type ProjectRulesDocument,
+} from "./project-rule-schema.js";
+import type { ProjectRoutingOption } from "./projects.js";
 
-export const DEFAULT_PROJECT_RULE_REFRESH_INTERVAL_MS = 60_000;
-
-export const PROJECT_RULE_FIELD_SOURCES = [
-  "request.body",
-  "request.query",
-  "request.params",
-  "request.headers",
-  "response.body",
-  "response.status",
-] as const;
-
-const PROJECT_FIELD_TYPES = [
-  "BOOLEAN",
-  "BIGINT",
-  "DOUBLE",
-  "VARCHAR",
-  "JSON",
-] as const satisfies readonly ProjectFieldType[];
-
-const reservedProjectFieldNames: ReadonlySet<string> = new Set(
-  PROJECT_EVENT_RESERVED_FIELD_NAMES,
-);
-
-export const projectRulesConfigSchema = z
-  .object({
-    url: z.url(),
-    refreshIntervalMs: z
-      .number()
-      .int()
-      .positive()
-      .default(DEFAULT_PROJECT_RULE_REFRESH_INTERVAL_MS),
-  })
-  .strict();
-
-const projectRuleFieldSchema = z
-  .object({
-    field: z.string().trim().min(1),
-    source: z.enum(PROJECT_RULE_FIELD_SOURCES),
-    path: z.string().trim().min(1).optional(),
-    type: z.enum(PROJECT_FIELD_TYPES),
-    optional: z.boolean().default(false),
-  })
-  .strict()
-  .superRefine((field, context) => {
-    if (reservedProjectFieldNames.has(field.field)) {
-      context.addIssue({
-        code: "custom",
-        path: ["field"],
-        message: `Project field "${field.field}" is reserved`,
-      });
-    }
-
-    if (field.source === "response.status") {
-      if (typeof field.path !== "undefined") {
-        context.addIssue({
-          code: "custom",
-          path: ["path"],
-          message: "response.status rules must not define a path",
-        });
-      }
-      return;
-    }
-
-    if (typeof field.path === "undefined") {
-      context.addIssue({
-        code: "custom",
-        path: ["path"],
-        message: `${field.source} rules require a dot path`,
-      });
-    }
-  });
-
-const projectRuleMatchSchema = z
-  .object({
-    method: z
-      .string()
-      .trim()
-      .min(1)
-      .transform((method) => method.toUpperCase()),
-    path: z
-      .string()
-      .trim()
-      .min(1)
-      .refine((path) => path.startsWith("/"), {
-        message: "Project rule match path must start with /",
-      }),
-  })
-  .strict();
-
-export const projectExtractionRuleSchema = z
-  .object({
-    project_id: z.string().trim().min(1),
-    project_rule_version: z.string().trim().min(1),
-    match: projectRuleMatchSchema,
-    fields: z.array(projectRuleFieldSchema).min(1),
-  })
-  .strict();
-
-export const projectRulesDocumentSchema = z
-  .object({
-    version: z.literal(1),
-    rules: z.array(projectExtractionRuleSchema),
-  })
-  .strict();
-
-export type ProjectRulesConfig = z.input<typeof projectRulesConfigSchema>;
-export type ResolvedProjectRulesConfig = z.output<typeof projectRulesConfigSchema>;
-export type ProjectRuleFieldSource = (typeof PROJECT_RULE_FIELD_SOURCES)[number];
-export type ProjectRuleField = z.output<typeof projectRuleFieldSchema>;
-export type ProjectRuleMatch = z.output<typeof projectRuleMatchSchema>;
-export type ProjectExtractionRule = z.output<typeof projectExtractionRuleSchema>;
-export type ProjectRulesDocument = z.output<typeof projectRulesDocumentSchema>;
+export {
+  DEFAULT_PROJECT_RULE_REFRESH_INTERVAL_MS,
+  PROJECT_RULE_FIELD_SOURCES,
+  projectExtractionRuleSchema,
+  projectRuleFieldSchema,
+  projectRuleMatchSchema,
+  projectRulesConfigSchema,
+  projectRulesDocumentSchema,
+  type ProjectExtractionRule,
+  type ProjectRuleField,
+  type ProjectRuleFieldSource,
+  type ProjectRuleMatch,
+  type ProjectRulesConfig,
+  type ProjectRulesDocument,
+  type ResolvedProjectRulesConfig,
+} from "./project-rule-schema.js";
 
 export interface ProjectRulesManagerOptions {
-  projectRules?: ProjectRulesConfig | undefined;
+  projects: ProjectRoutingOption;
+  apiKey?: string | undefined;
+  apiUrl?: string | undefined;
   fetchImpl: typeof fetch;
 }
 
 export class ProjectRulesManager {
-  private readonly config: ResolvedProjectRulesConfig | null;
-  private cachedDocument: ProjectRulesDocument | null = null;
+  private cachedDiscovery: ActiveProjectDiscoveryResult | null = null;
   private nextRefreshAt = 0;
-  private refreshPromise: Promise<ProjectRulesDocument | null> | null = null;
+  private refreshPromise: Promise<ActiveProjectDiscoveryResult | null> | null = null;
   private refreshError: Error | null = null;
 
-  constructor(private readonly options: ProjectRulesManagerOptions) {
-    this.config =
-      typeof options.projectRules === "undefined"
-        ? null
-        : projectRulesConfigSchema.parse(options.projectRules);
-  }
+  constructor(private readonly options: ProjectRulesManagerOptions) {}
 
   get enabled(): boolean {
-    return this.config !== null;
+    return this.options.projects !== false;
   }
 
   get lastError(): Error | null {
@@ -145,22 +53,42 @@ export class ProjectRulesManager {
   }
 
   currentDocument(): ProjectRulesDocument | null {
-    return this.cachedDocument;
+    return this.cachedDiscovery
+      ? {
+          version: 1,
+          rules: this.cachedDiscovery.rules,
+        }
+      : null;
   }
 
   async getRules(): Promise<readonly ProjectExtractionRule[]> {
-    const document = await this.getDocument();
-    return document?.rules ?? [];
+    const discovery = await this.getDiscovery();
+    return discovery?.rules ?? [];
   }
 
   async getDocument(): Promise<ProjectRulesDocument | null> {
-    if (!this.config) {
+    const discovery = await this.getDiscovery();
+    return discovery
+      ? {
+          version: 1,
+          rules: discovery.rules,
+        }
+      : null;
+  }
+
+  async getProjects(): Promise<readonly ProjectDiscoveryProject[]> {
+    const discovery = await this.getDiscovery();
+    return discovery?.projects ?? [];
+  }
+
+  private async getDiscovery(): Promise<ActiveProjectDiscoveryResult | null> {
+    if (!this.enabled) {
       return null;
     }
 
     const now = Date.now();
     if (now < this.nextRefreshAt) {
-      return this.cachedDocument;
+      return this.cachedDiscovery;
     }
 
     if (this.refreshPromise) {
@@ -179,22 +107,37 @@ export class ProjectRulesManager {
     }
   }
 
-  private async refresh(startedAt: number): Promise<ProjectRulesDocument | null> {
-    if (!this.config) {
+  private async refresh(startedAt: number): Promise<ActiveProjectDiscoveryResult | null> {
+    if (!this.enabled) {
       return null;
     }
 
     try {
-      const payload = await fetchProjectRules(this.options.fetchImpl, this.config.url);
-      const document = parseProjectRulesDocument(payload);
-      this.cachedDocument = document;
+      const discovery = this.cachedDiscovery
+        ? await fetchProjectDiscoveryRules(
+            this.options.fetchImpl,
+            this.cachedDiscovery.rulesUrl,
+          )
+        : await discoverProjectConfig({
+            apiKey: this.options.apiKey,
+            apiUrl: this.options.apiUrl,
+            projectIds: this.options.projects === false ? undefined : this.options.projects.ids,
+            fetchImpl: this.options.fetchImpl,
+          });
+
+      if (!discovery.active) {
+        this.refreshError = discovery.error ?? null;
+        return this.cachedDiscovery;
+      }
+
+      this.cachedDiscovery = discovery;
       this.refreshError = null;
-      return document;
+      return discovery;
     } catch (error) {
       this.refreshError = toError(error);
-      return this.cachedDocument;
+      return this.cachedDiscovery;
     } finally {
-      this.nextRefreshAt = startedAt + this.config.refreshIntervalMs;
+      this.nextRefreshAt = startedAt + getProjectRuleRefreshIntervalMs(this.options.projects);
     }
   }
 }
@@ -203,10 +146,10 @@ export function parseProjectRulesDocument(payload: unknown): ProjectRulesDocumen
   return projectRulesDocumentSchema.parse(payload);
 }
 
-async function fetchProjectRules(
+async function fetchProjectDiscoveryRules(
   fetchImpl: typeof fetch,
   url: string,
-): Promise<unknown> {
+): Promise<ActiveProjectDiscoveryResult> {
   const response = await fetchImpl(url, {
     method: "GET",
     headers: {
@@ -219,7 +162,13 @@ async function fetchProjectRules(
     throw new Error(`Project rules fetch failed (${response.status}): ${payload}`);
   }
 
-  return await response.json();
+  return parseProjectDiscoveryResponse(await response.json());
+}
+
+function getProjectRuleRefreshIntervalMs(projects: ProjectRoutingOption): number {
+  return projects === false
+    ? DEFAULT_PROJECT_RULE_REFRESH_INTERVAL_MS
+    : projects.refreshIntervalMs;
 }
 
 function toError(error: unknown): Error {

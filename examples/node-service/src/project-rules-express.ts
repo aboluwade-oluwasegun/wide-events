@@ -1,7 +1,8 @@
 import {
   WideEvents,
   type ExpressRequestLike,
-  type ProjectRulesDocument,
+  type ProjectRuleField,
+  type ProjectRuleMatch,
 } from "@wide-events/sdk";
 
 type ExpressMiddlewareLike = ReturnType<WideEvents["expressMiddleware"]>;
@@ -50,66 +51,88 @@ interface CheckoutResponse {
 
 export interface CheckoutProjectEventsOptions {
   collectorUrl: string;
+  apiKey: string;
+  apiUrl: string;
   environment?: string | undefined;
-  projectRulesUrl: string;
+  projectIds?: string[] | undefined;
 }
 
-export const checkoutProjectRules = {
-  version: 1,
-  rules: [
+interface ProjectDiscoveryRulesResponse {
+  rulesUrl: string;
+  projects: Array<{
+    project_id: string;
+    rule_version: string;
+    rules: {
+      routes: Array<{
+        match: ProjectRuleMatch;
+        fields: ProjectRuleField[];
+      }>;
+    };
+  }>;
+}
+
+export const checkoutProjectDiscoveryResponse = {
+  rulesUrl: "https://cdn.example.com/wide-events/rules.json",
+  projects: [
     {
       project_id: "project_checkout",
-      project_rule_version: "2026-07-01",
-      match: {
-        method: "POST",
-        path: "/checkout",
+      rule_version: "2026-07-01",
+      rules: {
+        routes: [
+          {
+            match: {
+              method: "POST",
+              path: "/checkout",
+            },
+            fields: [
+              {
+                field: "cart.item_count",
+                source: "request.body",
+                path: "cart.itemCount",
+                type: "BIGINT",
+                optional: false,
+              },
+              {
+                field: "coupon.applied",
+                source: "request.body",
+                path: "cart.couponApplied",
+                type: "BOOLEAN",
+                optional: false,
+              },
+              {
+                field: "order.currency",
+                source: "request.body",
+                path: "order.currency",
+                type: "VARCHAR",
+                optional: false,
+              },
+              {
+                field: "order.total",
+                source: "response.body",
+                path: "order.total",
+                type: "DOUBLE",
+                optional: false,
+              },
+              {
+                field: "order.status",
+                source: "response.body",
+                path: "order.status",
+                type: "VARCHAR",
+                optional: false,
+              },
+              {
+                field: "response.status",
+                source: "response.status",
+                type: "BIGINT",
+                optional: false,
+              },
+            ],
+          },
+        ],
       },
-      fields: [
-        {
-          field: "cart.item_count",
-          source: "request.body",
-          path: "cart.itemCount",
-          type: "BIGINT",
-          optional: false,
-        },
-        {
-          field: "coupon.applied",
-          source: "request.body",
-          path: "cart.couponApplied",
-          type: "BOOLEAN",
-          optional: false,
-        },
-        {
-          field: "order.currency",
-          source: "request.body",
-          path: "order.currency",
-          type: "VARCHAR",
-          optional: false,
-        },
-        {
-          field: "order.total",
-          source: "response.body",
-          path: "order.total",
-          type: "DOUBLE",
-          optional: false,
-        },
-        {
-          field: "order.status",
-          source: "response.body",
-          path: "order.status",
-          type: "VARCHAR",
-          optional: false,
-        },
-        {
-          field: "response.status",
-          source: "response.status",
-          type: "BIGINT",
-          optional: false,
-        },
-      ],
     },
   ],
-} satisfies ProjectRulesDocument;
+} satisfies ProjectDiscoveryRulesResponse;
 
 export function configureCheckoutProjectEvents(
   app: ExpressLike,
@@ -119,9 +142,10 @@ export function configureCheckoutProjectEvents(
     serviceName: "checkout-api",
     environment: options.environment ?? "production",
     collectorUrl: options.collectorUrl,
-    projects: ["project_checkout"],
-    projectRules: {
-      url: options.projectRulesUrl,
+    apiKey: options.apiKey,
+    apiUrl: options.apiUrl,
+    projects: {
+      ids: options.projectIds ?? ["project_checkout"],
       refreshIntervalMs: 60_000,
     },
   });

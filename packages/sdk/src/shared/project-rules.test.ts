@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProjectRulesManager,
   parseProjectRulesDocument,
-  type ProjectRulesDocument,
 } from "./project-rules";
 
 describe("parseProjectRulesDocument", () => {
@@ -95,19 +94,76 @@ describe("ProjectRulesManager", () => {
     vi.useRealTimers();
   });
 
-  it("fetches and caches rules until the refresh interval expires", async () => {
+  it("does not fetch project rules during construction", () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    new ProjectRulesManager({
+      projects: {
+        ids: ["project_checkout"],
+        refreshIntervalMs: 1_000,
+      },
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("discovers SaaS project rules on first use", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(createDiscoveryResponse("rules-v1")));
+    const manager = new ProjectRulesManager({
+      projects: {
+        ids: ["project_checkout"],
+        refreshIntervalMs: 1_000,
+      },
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com/",
+      fetchImpl,
+    });
+
+    await expect(manager.getRules()).resolves.toEqual([
+      expect.objectContaining({
+        project_id: "project_checkout",
+        project_rule_version: "rules-v1",
+      }),
+    ]);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.example.com/v1/sdk/projects/discover",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({
+      projectIds: ["project_checkout"],
+    });
+    expect(manager.currentDocument()).toEqual({
+      version: 1,
+      rules: [
+        expect.objectContaining({
+          project_id: "project_checkout",
+          project_rule_version: "rules-v1",
+        }),
+      ],
+    });
+  });
+
+  it("caches discovered rules until the refresh interval expires, then polls the CDN", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-04T00:00:00.000Z"));
 
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(createRulesDocument("rules-v1")))
-      .mockResolvedValueOnce(jsonResponse(createRulesDocument("rules-v2")));
+      .mockResolvedValueOnce(jsonResponse(createDiscoveryResponse("rules-v1")))
+      .mockResolvedValueOnce(jsonResponse(createDiscoveryResponse("rules-v2")));
     const manager = new ProjectRulesManager({
-      projectRules: {
-        url: "https://cdn.example.com/wide-events/project-rules.json",
+      projects: {
+        ids: ["project_checkout"],
         refreshIntervalMs: 1_000,
       },
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
       fetchImpl,
     });
 
@@ -130,36 +186,53 @@ describe("ProjectRulesManager", () => {
       expect.objectContaining({ project_rule_version: "rules-v2" }),
     ]);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+      "https://cdn.example.com/wide-events/rules.json",
+    );
+    expect(fetchImpl.mock.calls[1]?.[1]).toEqual({
+      method: "GET",
+      headers: {
+        accept: "application/json",
+      },
+    });
   });
 
-  it("disables extraction when no valid rules exist", async () => {
+  it("disables extraction when initial discovery has no valid rules", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({
-        version: 1,
-        rules: [
+        rulesUrl: "https://cdn.example.com/wide-events/rules.json",
+        projects: [
           {
             project_id: "project_checkout",
-            project_rule_version: "rules-v1",
-            match: {
-              method: "POST",
-              path: "/checkout",
+            rule_version: "rules-v1",
+            rules: {
+              routes: [
+                {
+                  match: {
+                    method: "POST",
+                    path: "/checkout",
+                  },
+                  fields: [
+                    {
+                      field: "order.total",
+                      source: "request.body",
+                      type: "DOUBLE",
+                    },
+                  ],
+                },
+              ],
             },
-            fields: [
-              {
-                field: "order.total",
-                source: "request.body",
-                type: "DOUBLE",
-              },
-            ],
           },
         ],
       }),
     );
     const manager = new ProjectRulesManager({
-      projectRules: {
-        url: "https://cdn.example.com/wide-events/project-rules.json",
+      projects: {
+        ids: ["project_checkout"],
         refreshIntervalMs: 1_000,
       },
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
       fetchImpl,
     });
 
@@ -168,19 +241,21 @@ describe("ProjectRulesManager", () => {
     expect(manager.lastError).toBeInstanceOf(Error);
   });
 
-  it("keeps the last valid rules when refresh fails", async () => {
+  it("keeps the last valid rules when CDN refresh fails", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-04T00:00:00.000Z"));
 
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(createRulesDocument("rules-v1")))
+      .mockResolvedValueOnce(jsonResponse(createDiscoveryResponse("rules-v1")))
       .mockRejectedValueOnce(new Error("offline"));
     const manager = new ProjectRulesManager({
-      projectRules: {
-        url: "https://cdn.example.com/wide-events/project-rules.json",
+      projects: {
+        ids: ["project_checkout"],
         refreshIntervalMs: 1_000,
       },
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
       fetchImpl,
     });
 
@@ -197,35 +272,98 @@ describe("ProjectRulesManager", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("does not fetch when project rules are not configured", async () => {
+  it("returns no rules when initial discovery fails", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("server failed", { status: 500 }));
+    const manager = new ProjectRulesManager({
+      projects: {
+        ids: ["project_checkout"],
+        refreshIntervalMs: 1_000,
+      },
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
+      fetchImpl,
+    });
+
+    await expect(manager.getRules()).resolves.toEqual([]);
+    expect(manager.currentDocument()).toBeNull();
+    expect(manager.lastError?.message).toBe(
+      "Project discovery failed (500): server failed",
+    );
+  });
+
+  it("returns no rules for unauthorized discovery", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("invalid token", { status: 401 }));
+    const manager = new ProjectRulesManager({
+      projects: {
+        ids: ["project_checkout"],
+        refreshIntervalMs: 1_000,
+      },
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
+      fetchImpl,
+    });
+
+    await expect(manager.getRules()).resolves.toEqual([]);
+    expect(manager.currentDocument()).toBeNull();
+    expect(manager.lastError?.message).toBe("Project discovery failed (401)");
+  });
+
+  it("does not fetch when project features are not configured", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
-    const manager = new ProjectRulesManager({ fetchImpl });
+    const manager = new ProjectRulesManager({
+      projects: false,
+      fetchImpl,
+    });
+
+    await expect(manager.getRules()).resolves.toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch when API activation config is missing", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const manager = new ProjectRulesManager({
+      projects: {
+        ids: ["project_checkout"],
+        refreshIntervalMs: 1_000,
+      },
+      apiUrl: "https://api.example.com",
+      fetchImpl,
+    });
 
     await expect(manager.getRules()).resolves.toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
-function createRulesDocument(ruleVersion: string): ProjectRulesDocument {
+function createDiscoveryResponse(ruleVersion: string): unknown {
   return {
-    version: 1,
-    rules: [
+    rulesUrl: "https://cdn.example.com/wide-events/rules.json",
+    projects: [
       {
         project_id: "project_checkout",
-        project_rule_version: ruleVersion,
-        match: {
-          method: "POST",
-          path: "/checkout",
+        rule_version: ruleVersion,
+        rules: {
+          routes: [
+            {
+              match: {
+                method: "POST",
+                path: "/checkout",
+              },
+              fields: [
+                {
+                  field: "order.total",
+                  source: "response.body",
+                  path: "total",
+                  type: "DOUBLE",
+                },
+              ],
+            },
+          ],
         },
-        fields: [
-          {
-            field: "order.total",
-            source: "response.body",
-            path: "total",
-            type: "DOUBLE",
-            optional: false,
-          },
-        ],
       },
     ],
   };

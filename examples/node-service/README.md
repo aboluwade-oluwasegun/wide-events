@@ -12,12 +12,12 @@ The example creates one main event per request, annotates `http.route`, and expo
 
 [`src/project-rules-express.ts`](src/project-rules-express.ts) shows the project-rules middleware flow for an Express-shaped app:
 
-1. Publish a `ProjectRulesDocument` JSON file to a CDN or static asset host.
-2. Configure the SDK with `projects: ["project_checkout"]` and `projectRules.url`.
+1. Create a Wide Events SaaS API key and attach the `project_checkout` project to it.
+2. Configure the SDK with `apiKey`, `apiUrl`, and `projects.ids`.
 3. Install `wideEvents.expressMiddleware()`.
 4. Let the middleware extract request and response fields into `project_events`; the route handler does not call `annotateProject()`.
 
-The exported `checkoutProjectRules` constant is checked against the SDK `ProjectRulesDocument` type, so the example stays aligned with the JSON format accepted by the SDK poller.
+The exported `checkoutProjectDiscoveryResponse` constant shows the discovery/CDN response shape the SaaS platform returns: a `rulesUrl` plus project-scoped `rules.routes`.
 
 ## DynamoDB helper
 

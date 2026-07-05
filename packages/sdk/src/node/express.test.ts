@@ -177,25 +177,56 @@ describe("WideEvents Express adapter", () => {
     expect(exportedEvents[0]?.project_fields).toBeUndefined();
     expect(exportedEvents[0]?.project_field_types).toBeUndefined();
   });
+
+  it("leaves Express requests as normal events when project discovery is unauthorized", async () => {
+    const exportedEvents: WideEvent[] = [];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("invalid token", { status: 401 }));
+    const wide = createExpressWideEvents(exportedEvents, {
+      version: 1,
+      rules: [],
+    }, fetchImpl);
+    const response = new FakeExpressResponse();
+
+    await invokeExpress(wide, {
+      method: "POST",
+      url: "/checkout",
+      path: "/checkout",
+      body: {
+        cart: {
+          itemCount: 2,
+        },
+      },
+    }, response, () => {
+      response.send("ok");
+    });
+
+    await waitFor(() => exportedEvents.length === 1);
+    expect(exportedEvents[0]).toEqual(
+      expect.objectContaining({
+        "http.route": "/checkout",
+        "http.status_code": 200,
+      }),
+    );
+    expect(exportedEvents[0]?.project_id).toBeUndefined();
+    expect(exportedEvents[0]?.project_fields).toBeUndefined();
+    expect(exportedEvents[0]?.project_field_types).toBeUndefined();
+  });
 });
 
 function createExpressWideEvents(
   exportedEvents: WideEvent[],
   rulesDocument: unknown,
+  fetchImpl: typeof fetch = createProjectDiscoveryFetch(rulesDocument),
 ): WideEvents {
-  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-    new Response(JSON.stringify(rulesDocument), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }),
-  );
-
   return new WideEvents({
     serviceName: "checkout-api",
     environment: "prod",
-    projects: ["project_checkout"],
-    projectRules: {
-      url: "https://cdn.example.com/wide-events/project-rules.json",
+    apiKey: "we_key_123",
+    apiUrl: "https://api.example.com",
+    projects: {
+      ids: ["project_checkout"],
       refreshIntervalMs: 30_000,
     },
     fetchImpl,
@@ -205,6 +236,65 @@ function createExpressWideEvents(
       },
     },
   });
+}
+
+function createProjectDiscoveryFetch(rulesDocument: unknown): typeof fetch {
+  return vi.fn<typeof fetch>().mockResolvedValue(
+    new Response(JSON.stringify(createProjectDiscoveryResponse(rulesDocument)), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+}
+
+function createProjectDiscoveryResponse(rulesDocument: unknown): unknown {
+  const routesByProject = new Map<
+    string,
+    {
+      rule_version: string;
+      routes: Array<{ match: unknown; fields: unknown }>;
+    }
+  >();
+  const rules = isRecord(rulesDocument) && Array.isArray(rulesDocument["rules"])
+    ? rulesDocument["rules"]
+    : [];
+
+  for (const rule of rules) {
+    if (!isRecord(rule)) {
+      continue;
+    }
+
+    const projectId = String(rule["project_id"] ?? "");
+    const ruleVersion = String(rule["project_rule_version"] ?? "");
+    if (!projectId || !ruleVersion) {
+      continue;
+    }
+
+    const project = routesByProject.get(projectId) ?? {
+      rule_version: ruleVersion,
+      routes: [],
+    };
+    project.routes.push({
+      match: rule["match"],
+      fields: rule["fields"],
+    });
+    routesByProject.set(projectId, project);
+  }
+
+  return {
+    rulesUrl: "https://cdn.example.com/wide-events/rules.json",
+    projects: [...routesByProject.entries()].map(([project_id, project]) => ({
+      project_id,
+      rule_version: project.rule_version,
+      rules: {
+        routes: project.routes,
+      },
+    })),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 async function invokeExpress(

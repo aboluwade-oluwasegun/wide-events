@@ -7,7 +7,7 @@ import {
   type WideEventSink,
 } from "../shared/core.js";
 import {
-  edgeOptionsSchema,
+  resolveEdgeOptions,
   type EdgeWideEventsOptions,
   type ResolvedEdgeWideEventsOptions,
 } from "../shared/options.js";
@@ -39,11 +39,7 @@ export class WideEvents {
   private readonly core: CoreWideEvents;
 
   constructor(options: EdgeWideEventsOptions) {
-    this.options = {
-      ...edgeOptionsSchema.parse(options),
-      fetchImpl: options.fetchImpl,
-      sink: options.sink,
-    };
+    this.options = resolveEdgeOptions(options);
     this.core = new CoreWideEvents(this.options, this.storage);
 
     if (this.options.autoInstrument.fetch) {
@@ -147,7 +143,6 @@ export type {
   ProjectRuleField,
   ProjectRuleFieldSource,
   ProjectRuleMatch,
-  ProjectRulesConfig,
   ProjectRulesDocument,
 } from "../shared/project-rules.js";
 export type {

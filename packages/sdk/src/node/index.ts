@@ -1092,7 +1092,6 @@ export type {
   ProjectRuleField,
   ProjectRuleFieldSource,
   ProjectRuleMatch,
-  ProjectRulesConfig,
   ProjectRulesDocument,
 } from "../shared/project-rules.js";
 export type {

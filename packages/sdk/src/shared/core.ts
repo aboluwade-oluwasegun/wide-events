@@ -14,7 +14,6 @@ import { createCorrelationId, createEventId } from "./ids.js";
 import {
   ProjectRulesManager,
   type ProjectExtractionRule,
-  type ProjectRulesConfig,
 } from "./project-rules.js";
 import type { ProjectExtractionMetadata } from "./project-extraction.js";
 import {
@@ -44,11 +43,12 @@ export interface CoreWideEventsOptions {
   serviceName: string;
   environment: string;
   collectorUrl?: string | undefined;
+  apiKey?: string | undefined;
+  apiUrl?: string | undefined;
   sampleRate: number;
   disabled: boolean;
   batchSize: number;
   projects: ProjectRoutingOption;
-  projectRules?: ProjectRulesConfig | undefined;
   fetchImpl?: typeof fetch | undefined;
   sink?: WideEventSink | undefined;
 }
@@ -70,16 +70,15 @@ export class CoreWideEvents {
     private readonly storage: ContextStorage,
   ) {
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.projectRouting = new ProjectRoutingManager({
+    this.projectRules = new ProjectRulesManager({
       projects: options.projects,
-      collectorUrl: options.collectorUrl,
-      serviceName: options.serviceName,
-      environment: options.environment,
+      apiKey: options.apiKey,
+      apiUrl: options.apiUrl,
       fetchImpl: this.fetchImpl,
     });
-    this.projectRules = new ProjectRulesManager({
-      projectRules: options.projectRules,
-      fetchImpl: this.fetchImpl,
+    this.projectRouting = new ProjectRoutingManager({
+      projects: options.projects,
+      resolveProjects: () => this.projectRules.getProjects(),
     });
   }
 

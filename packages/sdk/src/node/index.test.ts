@@ -69,6 +69,41 @@ describe("WideEvents node SDK", () => {
     );
   });
 
+  it("exports ordinary events when project activation config is missing", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const wide = new WideEvents({
+      serviceName: "payments",
+      collectorUrl: "http://collector.test",
+      fetchImpl,
+      batchSize: 1,
+      projects: {
+        ids: ["project_checkout"],
+      },
+    });
+    const handler = wide.wrapHandler(async () => {
+      wide.annotate({ "user.id": "user-1" });
+      return { statusCode: 200, body: "ok" };
+    });
+
+    await handler(
+      {
+        rawPath: "/checkout",
+        requestContext: { http: { method: "POST" } },
+      },
+      {},
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://collector.test/v1/events");
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(body.events[0]).toEqual(
+      expect.objectContaining({
+        "user.id": "user-1",
+      }),
+    );
+    expect(body.events[0]).not.toHaveProperty("project_id");
+  });
+
   it("records thrown lambda errors automatically", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
     const wide = new WideEvents({
@@ -97,13 +132,20 @@ describe("WideEvents node SDK", () => {
   });
 
   it("exports project events for explicit project ids", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(createDiscoveryResponse("project_static", "rules-v1")))
+      .mockResolvedValueOnce(new Response("", { status: 202 }));
     const wide = new WideEvents({
       serviceName: "payments",
       environment: "prod",
       collectorUrl: "http://collector.test",
       fetchImpl,
-      projects: ["project_static"],
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
+      projects: {
+        ids: ["project_static"],
+      },
     });
     const handler = wide.wrapHandler(async () => {
       wide.annotateProject({
@@ -121,7 +163,7 @@ describe("WideEvents node SDK", () => {
       {},
     );
 
-    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    const body = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
     expect(body.events).toHaveLength(1);
     expect(body.events[0]).toEqual(
       expect.objectContaining({
@@ -142,19 +184,42 @@ describe("WideEvents node SDK", () => {
     );
   });
 
-  it("fetches collector project routing config for projects=true", async () => {
+  it("fans out project events across discovered projects", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            ttl_seconds: 60,
+            rulesUrl: "https://cdn.example.com/wide-events/rules.json",
             projects: [
               {
                 project_id: "project_live",
-                project_rule_version: "rules-v3",
-                service_name: "payments",
-                environment: "prod",
+                rule_version: "rules-v3",
+                rules: {
+                  routes: [
+                    {
+                      match: {
+                        method: "POST",
+                        path: "/checkout",
+                      },
+                      fields: [
+                        {
+                          field: "checkout.converted",
+                          source: "request.body",
+                          path: "converted",
+                          type: "BOOLEAN",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+              {
+                project_id: "project_growth",
+                rule_version: "rules-v4",
+                rules: {
+                  routes: [],
+                },
               },
             ],
           }),
@@ -170,7 +235,9 @@ describe("WideEvents node SDK", () => {
       environment: "prod",
       collectorUrl: "http://collector.test/",
       fetchImpl,
-      projects: true,
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
+      projects: {},
     });
     const handler = wide.wrapHandler(async () => {
       wide.annotateProject({
@@ -188,31 +255,37 @@ describe("WideEvents node SDK", () => {
     );
 
     expect(fetchImpl.mock.calls[0]?.[0]).toBe(
-      "http://collector.test/v1/projects/config?serviceName=payments&serviceEnvironment=prod",
+      "https://api.example.com/v1/sdk/projects/discover",
     );
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({});
 
     const body = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
-    expect(body.events[0]).toEqual(
+    expect(body.events).toEqual([
       expect.objectContaining({
         project_id: "project_live",
         project_rule_version: "rules-v3",
-        project_fields: {
-          "checkout.converted": true,
-        },
-        project_field_types: {
-          "checkout.converted": "BOOLEAN",
-        },
       }),
-    );
+      expect.objectContaining({
+        project_id: "project_growth",
+        project_rule_version: "rules-v4",
+      }),
+    ]);
   });
 
-  it("rejects project events outside the configured explicit project ids", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+  it("rejects project events outside the discovered project ids", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(createDiscoveryResponse("project_a", "rules-v1")))
+      .mockResolvedValueOnce(new Response("", { status: 202 }));
     const wide = new WideEvents({
       serviceName: "payments",
       collectorUrl: "http://collector.test",
       fetchImpl,
-      projects: ["project_a"],
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
+      projects: {
+        ids: ["project_a"],
+      },
     });
     const handler = wide.wrapHandler(async () => {
       wide.annotateProject(
@@ -227,30 +300,36 @@ describe("WideEvents node SDK", () => {
     await expect(handler({}, {})).rejects.toThrow(
       'Project "project_b" is not configured for this SDK instance',
     );
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("fetches configured project extraction rules without middleware wiring", async () => {
+  it("discovers project extraction rules without middleware wiring", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         JSON.stringify({
-          version: 1,
-          rules: [
+          rulesUrl: "https://cdn.example.com/wide-events/rules.json",
+          projects: [
             {
               project_id: "project_checkout",
-              project_rule_version: "rules-v1",
-              match: {
-                method: "POST",
-                path: "/checkout",
+              rule_version: "rules-v1",
+              rules: {
+                routes: [
+                  {
+                    match: {
+                      method: "POST",
+                      path: "/checkout",
+                    },
+                    fields: [
+                      {
+                        field: "order.total",
+                        source: "response.body",
+                        path: "total",
+                        type: "DOUBLE",
+                      },
+                    ],
+                  },
+                ],
               },
-              fields: [
-                {
-                  field: "order.total",
-                  source: "response.body",
-                  path: "total",
-                  type: "DOUBLE",
-                },
-              ],
             },
           ],
         }),
@@ -262,8 +341,10 @@ describe("WideEvents node SDK", () => {
     );
     const wide = new WideEvents({
       serviceName: "payments",
-      projectRules: {
-        url: "https://cdn.example.com/wide-events/project-rules.json",
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
+      projects: {
+        ids: ["project_checkout"],
         refreshIntervalMs: 30_000,
       },
       fetchImpl,
@@ -276,9 +357,12 @@ describe("WideEvents node SDK", () => {
       }),
     ]);
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://cdn.example.com/wide-events/project-rules.json",
-      expect.objectContaining({ method: "GET" }),
+      "https://api.example.com/v1/sdk/projects/discover",
+      expect.objectContaining({ method: "POST" }),
     );
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({
+      projectIds: ["project_checkout"],
+    });
   });
 
   it("records fetch failures automatically", async () => {
@@ -407,3 +491,40 @@ describe("WideEvents node SDK", () => {
     });
   });
 });
+
+function createDiscoveryResponse(projectId: string, ruleVersion: string): unknown {
+  return {
+    rulesUrl: "https://cdn.example.com/wide-events/rules.json",
+    projects: [
+      {
+        project_id: projectId,
+        rule_version: ruleVersion,
+        rules: {
+          routes: [
+            {
+              match: {
+                method: "POST",
+                path: "/checkout",
+              },
+              fields: [
+                {
+                  field: "order.total",
+                  source: "response.body",
+                  path: "total",
+                  type: "DOUBLE",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}

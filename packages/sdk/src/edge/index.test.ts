@@ -73,14 +73,21 @@ describe("WideEvents edge SDK", () => {
   });
 
   it("exports project events from edge handlers", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 202 }));
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(createDiscoveryResponse("project_worker", "rules-v1")))
+      .mockResolvedValueOnce(new Response("", { status: 202 }));
     const wide = new WideEvents({
       serviceName: "worker",
       environment: "prod",
       collectorUrl: "http://collector.test",
       fetchImpl,
-      batchSize: 1,
-      projects: ["project_worker"],
+      batchSize: 100,
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com",
+      projects: {
+        ids: ["project_worker"],
+      },
     });
     const promises: Promise<unknown>[] = [];
 
@@ -102,10 +109,11 @@ describe("WideEvents edge SDK", () => {
     expect(response.status).toBe(201);
     await Promise.all(promises);
 
-    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    const body = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
     expect(body.events[0]).toEqual(
       expect.objectContaining({
         project_id: "project_worker",
+        project_rule_version: "rules-v1",
         "service.name": "worker",
         "service.environment": "prod",
         "http.route": "/checkout",
@@ -120,3 +128,40 @@ describe("WideEvents edge SDK", () => {
     );
   });
 });
+
+function createDiscoveryResponse(projectId: string, ruleVersion: string): unknown {
+  return {
+    rulesUrl: "https://cdn.example.com/wide-events/rules.json",
+    projects: [
+      {
+        project_id: projectId,
+        rule_version: ruleVersion,
+        rules: {
+          routes: [
+            {
+              match: {
+                method: "POST",
+                path: "/checkout",
+              },
+              fields: [
+                {
+                  field: "checkout.converted",
+                  source: "request.body",
+                  path: "converted",
+                  type: "BOOLEAN",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}

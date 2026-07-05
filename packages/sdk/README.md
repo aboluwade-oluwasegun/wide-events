@@ -79,14 +79,21 @@ export default {
 
 Project routing is opt-in. Omit `projects` or set it to `false` for default events only.
 
-Use explicit project IDs when the app already knows the projects it can emit:
+Project features require a Wide Events SaaS API key. When project routing or rules middleware first needs project config, the SDK verifies `apiKey` against `apiUrl` and receives the rules CDN URL plus rules for the requested projects.
+
+Use `projects.ids` when the app already knows the projects it can emit:
 
 ```ts
 const wideEvents = new WideEvents({
   serviceName: "checkout-api",
   environment: "production",
   collectorUrl: "https://collector.example.com",
-  projects: ["project_checkout"],
+  apiKey: process.env["WIDE_EVENTS_API_KEY"],
+  apiUrl: process.env["WIDE_EVENTS_API_URL"],
+  projects: {
+    ids: ["project_checkout"],
+    refreshIntervalMs: 60_000,
+  },
 });
 
 app.post("/checkout", async (req, res) => {
@@ -100,72 +107,110 @@ app.post("/checkout", async (req, res) => {
 });
 ```
 
-Use collector-driven routing when project config should update without redeploying the app:
+If `projects` is present without `ids`, the discovery request body is `{}` and the SaaS API returns every project attached to the key:
 
 ```ts
 const wideEvents = new WideEvents({
   serviceName: "checkout-api",
   environment: "production",
   collectorUrl: "https://collector.example.com",
-  projects: true,
-});
-```
-
-With `projects: true`, the SDK fetches `GET /v1/projects/config` from the collector during export, caches the response for the collector-provided TTL, and refreshes after the TTL expires. `annotateProject()` emits project events with `project_id`, `project_rule_version`, `project_fields`, and `project_field_types`; those events are stored by the collector in `project_events`, not the default `events` table.
-
-### Project Rules Middleware
-
-Project rules let framework middleware extract project fields from request and response data without manually calling `annotateProject()` in route business logic.
-
-Configure the SDK with a CDN-hosted JSON rules document:
-
-```ts
-const wideEvents = new WideEvents({
-  serviceName: "checkout-api",
-  environment: "production",
-  collectorUrl: "https://collector.example.com",
-  projects: ["project_checkout"],
-  projectRules: {
-    url: "https://cdn.example.com/wide-events/checkout-project-rules.json",
+  apiKey: process.env["WIDE_EVENTS_API_KEY"],
+  apiUrl: process.env["WIDE_EVENTS_API_URL"],
+  projects: {
     refreshIntervalMs: 60_000,
   },
 });
 ```
 
-`projectRules.url` must return JSON. The SDK fetches it on demand, caches it for `refreshIntervalMs`, keeps the last valid rules when refresh fails, and disables automatic project extraction when no valid rules are available.
+If the API key is missing or rejected, project features stay inactive and regular events continue to export. `annotateProject()` emits project events with `project_id`, `project_rule_version`, `project_fields`, and `project_field_types`; those events are stored by the collector in `project_events`, not the default `events` table.
 
-Rules use exact method/path matching and direct dot-path extraction only:
+### Project Rules Middleware
+
+Project rules let framework middleware extract project fields from request and response data without manually calling `annotateProject()` in route business logic.
+
+Configure projects and rules in the Wide Events SaaS platform, then initialize the SDK with the API key and optional project IDs:
+
+```ts
+const wideEvents = new WideEvents({
+  serviceName: "checkout-api",
+  environment: "production",
+  collectorUrl: "https://collector.example.com",
+  apiKey: process.env["WIDE_EVENTS_API_KEY"],
+  apiUrl: process.env["WIDE_EVENTS_API_URL"],
+  projects: {
+    ids: ["project_checkout"],
+    refreshIntervalMs: 60_000,
+  },
+});
+```
+
+Discovery sends only project IDs in the request body when IDs are configured:
 
 ```json
 {
-  "version": 1,
-  "rules": [
+  "projectIds": ["project_checkout"]
+}
+```
+
+The discovery response and CDN rules document use the same shape:
+
+```json
+{
+  "rulesUrl": "https://cdn.example.com/wide-events/rules.json",
+  "projects": [
     {
       "project_id": "project_checkout",
-      "project_rule_version": "2026-07-01",
-      "match": {
-        "method": "POST",
-        "path": "/checkout"
-      },
-      "fields": [
-        {
-          "field": "cart.item_count",
-          "source": "request.body",
-          "path": "cart.itemCount",
-          "type": "BIGINT"
-        },
-        {
-          "field": "order.total",
-          "source": "response.body",
-          "path": "order.total",
-          "type": "DOUBLE"
-        },
-        {
-          "field": "response.status",
-          "source": "response.status",
-          "type": "BIGINT"
-        }
-      ]
+      "rule_version": "2026-07-01",
+      "rules": {
+        "routes": [
+          {
+            "match": {
+              "method": "POST",
+              "path": "/checkout"
+            },
+            "fields": [
+              {
+                "field": "cart.item_count",
+                "source": "request.body",
+                "path": "cart.itemCount",
+                "type": "BIGINT"
+              },
+              {
+                "field": "order.total",
+                "source": "response.body",
+                "path": "order.total",
+                "type": "DOUBLE"
+              },
+              {
+                "field": "response.status",
+                "source": "response.status",
+                "type": "BIGINT"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+The SDK uses inline rules from discovery immediately, then polls `rulesUrl` after `projects.refreshIntervalMs` (default `60_000`). It keeps the last valid rules when refresh fails and disables automatic project extraction when no valid rules are available.
+
+Rules use exact method/path matching and direct dot-path extraction only. Each route inherits `project_id` and `rule_version` from its enclosing project:
+
+```json
+{
+  "match": {
+    "method": "POST",
+    "path": "/checkout"
+  },
+  "fields": [
+    {
+      "field": "cart.item_count",
+      "source": "request.body",
+      "path": "cart.itemCount",
+      "type": "BIGINT"
     }
   ]
 }

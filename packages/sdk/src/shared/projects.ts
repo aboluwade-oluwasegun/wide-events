@@ -1,17 +1,19 @@
 import {
   PROJECT_EVENT_RESERVED_FIELD_NAMES,
   normalizeEventPrimitive,
-  projectRoutingConfigResponseSchema,
   type EventValue,
   type ProjectFieldType,
   type ProjectFieldTypes,
   type ProjectFields,
-  type ProjectRoutingConfig,
   type WideEvent,
 } from "@wide-events/internal";
-import { getJson } from "./http.js";
 
-export type ProjectRoutingOption = boolean | readonly string[];
+export interface ProjectRoutingConfigOption {
+  ids?: readonly string[] | undefined;
+  refreshIntervalMs: number;
+}
+
+export type ProjectRoutingOption = false | ProjectRoutingConfigOption;
 
 export type ProjectAnnotationFields = Record<string, unknown>;
 
@@ -34,16 +36,15 @@ interface ProjectRoute {
 
 export interface ProjectRoutingManagerOptions {
   projects: ProjectRoutingOption;
-  collectorUrl?: string | undefined;
-  serviceName: string;
-  environment: string;
-  fetchImpl: typeof fetch;
+  resolveProjects?: (() => Promise<readonly ProjectRoutingProject[]>) | undefined;
+}
+
+export interface ProjectRoutingProject {
+  project_id: string;
+  rule_version: string;
 }
 
 export class ProjectRoutingManager {
-  private cachedRoutes: ProjectRoute[] = [];
-  private expiresAt = 0;
-
   constructor(private readonly options: ProjectRoutingManagerOptions) {}
 
   get enabled(): boolean {
@@ -127,51 +128,13 @@ export class ProjectRoutingManager {
   }
 
   private async resolveRoutes(): Promise<ProjectRoute[]> {
-    if (isProjectIdList(this.options.projects)) {
-      return this.options.projects.map((projectId) => ({
-        projectId,
-        projectRuleVersion: null,
-      }));
+    if (this.options.projects === false) {
+      return [];
     }
 
-    const now = Date.now();
-    if (now < this.expiresAt) {
-      return this.cachedRoutes;
-    }
-
-    if (!this.options.collectorUrl) {
-      throw new Error("Project config refresh requires collectorUrl");
-    }
-
-    const payload = await getJson(
-      this.options.fetchImpl,
-      buildProjectConfigUrl(
-        this.options.collectorUrl,
-        this.options.serviceName,
-        this.options.environment,
-      ),
-    );
-    const parsed = projectRoutingConfigResponseSchema.parse(payload);
-
-    this.cachedRoutes = parsed.projects.map(toProjectRoute);
-    this.expiresAt = now + parsed.ttl_seconds * 1_000;
-    return this.cachedRoutes;
+    const projects = (await this.options.resolveProjects?.()) ?? [];
+    return projects.map(toProjectRoute);
   }
-}
-
-function isProjectIdList(value: ProjectRoutingOption): value is readonly string[] {
-  return Array.isArray(value);
-}
-
-function buildProjectConfigUrl(
-  collectorUrl: string,
-  serviceName: string,
-  environment: string,
-): string {
-  const url = new URL(`${collectorUrl.replace(/\/$/u, "")}/v1/projects/config`);
-  url.searchParams.set("serviceName", serviceName);
-  url.searchParams.set("serviceEnvironment", environment);
-  return url.toString();
 }
 
 function applyProjectRoute(event: WideEvent, route: ProjectRoute): WideEvent {
@@ -182,10 +145,10 @@ function applyProjectRoute(event: WideEvent, route: ProjectRoute): WideEvent {
   };
 }
 
-function toProjectRoute(config: ProjectRoutingConfig): ProjectRoute {
+function toProjectRoute(project: ProjectRoutingProject): ProjectRoute {
   return {
-    projectId: config.project_id,
-    projectRuleVersion: config.project_rule_version,
+    projectId: project.project_id,
+    projectRuleVersion: project.rule_version,
   };
 }
 
