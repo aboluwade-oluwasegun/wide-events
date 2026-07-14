@@ -1,6 +1,6 @@
 {
   "name": "@wide-events/client",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "type": "module",
   "license": "AGPL-3.0-only",
   "engines": {
