@@ -14,7 +14,20 @@ npm install @wide-events/client
 import { WideEventsClient } from "@wide-events/client";
 
 const client = new WideEventsClient({ url: "http://localhost:4318" });
-const columns = await client.getColumns();
+
+const result = await client.query({
+  select: [
+    { fn: "COUNT", as: "requests" },
+    { fn: "P95", field: "duration_ms", as: "p95_duration_ms" },
+  ],
+  filters: [
+    { field: "service.name", op: "eq", value: "api" },
+    { field: "http.status_code", op: "gte", value: 500 },
+  ],
+  groupBy: ["http.route"],
+  orderBy: { field: "requests", dir: "desc" },
+  limit: 20,
+});
 ```
 
 ## API
@@ -26,75 +39,18 @@ const columns = await client.getColumns();
 | `getColumns()` | Returns collector schema metadata from `GET /columns`. |
 | `getEvents(correlationId)` | Returns all rows for a correlation id from `GET /events/:correlationId`. |
 
-## Structured query DSL
+## Query Notes
 
-```ts
-const result = await client.query({
-  select: [
-    { fn: "COUNT", as: "requests" },
-    { fn: "P95", field: "duration_ms", as: "p95_duration_ms" }
-  ],
-  filters: [
-    { field: "service.name", op: "eq", value: "api" },
-    { field: "http.status_code", op: "gte", value: 500 }
-  ],
-  groupBy: ["http.route"],
-  orderBy: { field: "requests", dir: "desc" },
-  limit: 20
-});
-```
+Supported aggregate functions are `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `P50`, `P95`, and `P99`.
 
-### Supported aggregate functions
+Supported filter operators are `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, and `in`.
 
-- `COUNT`
-- `SUM`
-- `AVG`
-- `MIN`
-- `MAX`
-- `P50`
-- `P95`
-- `P99`
+`StructuredQuery` supports:
 
-### Supported filter operators
+- `scope?: "main" | "all"` - omitted `scope` defaults to `"main"`.
 
-- `eq`
-- `neq`
-- `gt`
-- `gte`
-- `lt`
-- `lte`
-- `in`
-
-### Scope
-
-`StructuredQuery` supports `scope?: "main" | "all"`.
-
-- Omitted `scope` defaults to `"main"`.
-- `"main"` means the collector injects `main = true`.
-- `"all"` queries all stored events.
-
-Use `"all"` for event-level drill-down. Leave it at the default for product-style wide-event queries.
-
-## Raw SQL
-
-```ts
-const rows = await client.sql(`
-  SELECT "service.name", COUNT(*) AS requests
-  FROM events
-  WHERE main = true
-  GROUP BY 1
-  ORDER BY requests DESC
-`);
-```
-
-`/sql` is read-only in v0.1. Statements such as `INSERT`, `UPDATE`, `DELETE`, `ALTER`, `CREATE`, and `DROP` are rejected.
+Use `/sql` for overflow-only keys or backend-specific inspection.
 
 ## Errors
 
-Collector errors are surfaced as thrown `Error` instances using the collector response body:
-
-- `400` for invalid request payloads or invalid query shapes
-- `503` for queue saturation on ingest
-- `500` for unexpected collector failures
-
-Error bodies remain `{ error: string }`, so the client throws that string message when present.
+Collector errors are thrown as `Error` instances. When the collector response body includes `{ error: string }`, the client uses that string as the message.

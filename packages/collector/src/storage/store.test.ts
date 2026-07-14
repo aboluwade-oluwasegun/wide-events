@@ -1,19 +1,31 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { DynamicEventAttributes, StoredEventRow } from "@wide-events/internal";
+import type {
+  DynamicEventAttributes,
+  ProjectEventRow,
+  StoredEventRow,
+} from "@wide-events/internal";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CollectorConfig } from "../config";
 import { QueueLimitExceededError } from "../errors";
 import type { CollectorLogger } from "../logger";
 import { AttributeCatalog } from "./attribute-catalog";
-import { DuckDbDatabase } from "./database";
+import { DuckDbDatabase } from "./duckdb";
+import { ProjectSchemaRegistry } from "./project-schema-registry";
 import { SchemaRegistry } from "./schema-registry";
 import { CollectorStore } from "./store";
 
 interface LoggedEvent {
   bindings: Record<string, unknown>;
   message: string;
+}
+
+interface StoreHarness {
+  catalog: AttributeCatalog;
+  projectSchema: ProjectSchemaRegistry;
+  schema: SchemaRegistry;
+  store: CollectorStore;
 }
 
 function createRow(
@@ -43,6 +55,40 @@ function createRow(
     "user.org.id": null,
     attributes_overflow: attributes,
     promoted_attribute_hints: promotedAttributeHints,
+  };
+}
+
+function createProjectRow(
+  suffix: string,
+  fields: DynamicEventAttributes = {
+    "order.total": 42.5,
+  },
+): ProjectEventRow {
+  return {
+    correlation_id: `corr-${suffix}`,
+    event_id: `event-${suffix}`,
+    parent_event_id: null,
+    ts: "2024-01-01T00:00:00.000Z",
+    duration_ms: 10,
+    main: true,
+    sample_rate: 1,
+    "service.name": "payments",
+    "service.environment": "test",
+    "service.version": null,
+    "http.route": "/checkout",
+    "http.status_code": 200,
+    "http.request.method": "GET",
+    error: false,
+    "exception.slug": null,
+    "user.id": "user-123",
+    "user.type": null,
+    "user.org.id": null,
+    project_id: "project_123",
+    project_rule_version: "2026-07-01",
+    project_fields: fields,
+    project_field_types: Object.fromEntries(
+      Object.keys(fields).map((key) => [key, "DOUBLE"]),
+    ),
   };
 }
 
@@ -88,20 +134,34 @@ describe("CollectorStore", () => {
     await rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("flushes when the batch size is reached", async () => {
-    const schema = new SchemaRegistry(200);
+  async function createStoreHarness(
+    overrides: Partial<Extract<CollectorConfig, { storage: "duckdb" }>> = {},
+    logger?: CollectorLogger,
+  ): Promise<StoreHarness> {
+    const config = configOverrides(overrides);
+    const schema = new SchemaRegistry(config.maxPromotedColumns);
     await schema.hydrate(database);
+    const projectSchema = new ProjectSchemaRegistry();
+    await projectSchema.hydrate(database);
     const catalog = new AttributeCatalog();
     await catalog.hydrate(database);
     const store = new CollectorStore(
       database,
       schema,
+      projectSchema,
       catalog,
-      configOverrides({
-        batchSize: 2,
-        batchTimeoutMs: 5_000,
-      }),
+      config,
+      logger,
     );
+
+    return { catalog, projectSchema, schema, store };
+  }
+
+  it("flushes when the batch size is reached", async () => {
+    const { store } = await createStoreHarness({
+      batchSize: 2,
+      batchTimeoutMs: 5_000,
+    });
 
     let firstResolved = false;
     const firstBatch = store.enqueueRows([createRow("one")]).then(() => {
@@ -120,19 +180,10 @@ describe("CollectorStore", () => {
   });
 
   it("flushes on the batch timeout", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 10,
-        batchTimeoutMs: 25,
-      }),
-    );
+    const { store } = await createStoreHarness({
+      batchSize: 10,
+      batchTimeoutMs: 25,
+    });
 
     await store.enqueueRows([createRow("one")]);
 
@@ -143,20 +194,11 @@ describe("CollectorStore", () => {
   });
 
   it("returns a queue saturation error when the pending queue exceeds the limit", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 10,
-        batchTimeoutMs: 5_000,
-        queueLimit: 1,
-      }),
-    );
+    const { store } = await createStoreHarness({
+      batchSize: 10,
+      batchTimeoutMs: 5_000,
+      queueLimit: 1,
+    });
 
     const firstBatch = store.enqueueRows([createRow("one")]);
 
@@ -169,19 +211,12 @@ describe("CollectorStore", () => {
   });
 
   it("stores dynamic attributes in overflow and reports them in the catalog", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
     const { logger, warns } = createLogger();
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
+    const { catalog, schema, store } = await createStoreHarness(
+      {
         batchSize: 1,
         batchTimeoutMs: 5,
-      }),
+      },
       logger,
     );
 
@@ -207,23 +242,67 @@ describe("CollectorStore", () => {
     expect(warns).toHaveLength(0);
   });
 
-  it("promotes eligible overflow keys and writes subsequent rows to the promoted column", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 1,
-        batchTimeoutMs: 5,
-        promotionMinRows: 1,
-        promotionMinRatio: 0.5,
-        promotionMaxKeysPerRun: 1,
-      }),
+  it("stores project events separately from default events", async () => {
+    const { catalog, store } = await createStoreHarness({
+      batchSize: 2,
+      batchTimeoutMs: 5_000,
+    });
+
+    await store.enqueueIngestBatch({
+      defaultRows: [
+        createRow("default", {
+          "custom.value": "alpha",
+        }),
+      ],
+      projectRows: [createProjectRow("project")],
+    });
+
+    const defaultRows = await database.executeRead(
+      "SELECT event_id, attributes_overflow FROM events WHERE event_id = ?",
+      ["event-default"],
     );
+    const projectRows = await database.executeRead(
+      "SELECT event_id, project_id, project_rule_version, project_fields, project_field_types, \"order.total\" AS order_total FROM project_events WHERE event_id = ?",
+      ["event-project"],
+    );
+
+    expect(defaultRows).toEqual([
+      {
+        event_id: "event-default",
+        attributes_overflow: {
+          "custom.value": "alpha",
+        },
+      },
+    ]);
+    expect(projectRows).toEqual([
+      {
+        event_id: "event-project",
+        project_id: "project_123",
+        project_rule_version: "2026-07-01",
+        project_fields: {
+          "order.total": 42.5,
+        },
+          project_field_types: {
+            "order.total": "DOUBLE",
+          },
+          order_total: 42.5,
+        },
+      ]);
+      const projectColumns = await database.readColumns("project_events");
+      expect(projectColumns.some((column) => column.name === "order.total")).toBe(
+        true,
+      );
+      expect(catalog.getEntry("order.total")).toBeNull();
+    });
+
+  it("promotes eligible overflow keys and writes subsequent rows to the promoted column", async () => {
+    const { store } = await createStoreHarness({
+      batchSize: 1,
+      batchTimeoutMs: 5,
+      promotionMinRows: 1,
+      promotionMinRatio: 0.5,
+      promotionMaxKeysPerRun: 1,
+    });
 
     await store.enqueueRows([
       createRow("one", {
@@ -248,19 +327,10 @@ describe("CollectorStore", () => {
   });
 
   it("promotes hinted keys before the first insert and keeps them out of overflow", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 1,
-        batchTimeoutMs: 5,
-      }),
-    );
+    const { catalog, store } = await createStoreHarness({
+      batchSize: 1,
+      batchTimeoutMs: 5,
+    });
 
     await store.enqueueRows([
       createRow(
@@ -284,19 +354,10 @@ describe("CollectorStore", () => {
   });
 
   it("treats repeated hinted promotion as a no-op while continuing to write the promoted column", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 1,
-        batchTimeoutMs: 5,
-      }),
-    );
+    const { catalog, store } = await createStoreHarness({
+      batchSize: 1,
+      batchTimeoutMs: 5,
+    });
 
     await store.enqueueRows([
       createRow("one", { "custom.value": "alpha" }, "2024-01-01T00:00:00.000Z", [
@@ -320,19 +381,10 @@ describe("CollectorStore", () => {
   });
 
   it("writes multiple promoted columns using the correct raw key to column mapping", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 1,
-        batchTimeoutMs: 5,
-      }),
-    );
+    const { store } = await createStoreHarness({
+      batchSize: 1,
+      batchTimeoutMs: 5,
+    });
 
     await store.enqueueRows([
       createRow(
@@ -378,19 +430,10 @@ describe("CollectorStore", () => {
   });
 
   it("preserves overflow rows without allocating a filtered copy when no promoted keys are present", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 1,
-        batchTimeoutMs: 5,
-      }),
-    );
+    const { store } = await createStoreHarness({
+      batchSize: 1,
+      batchTimeoutMs: 5,
+    });
 
     await store.enqueueRows([
       createRow("one", {
@@ -410,19 +453,10 @@ describe("CollectorStore", () => {
   });
 
   it("rejects hinted baseline columns", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 1,
-        batchTimeoutMs: 5,
-      }),
-    );
+    const { store } = await createStoreHarness({
+      batchSize: 1,
+      batchTimeoutMs: 5,
+    });
 
     await expect(
       store.enqueueRows([
@@ -437,19 +471,10 @@ describe("CollectorStore", () => {
   });
 
   it("rejects hinted keys that are missing from the row attributes", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 1,
-        batchTimeoutMs: 5,
-      }),
-    );
+    const { store } = await createStoreHarness({
+      batchSize: 1,
+      batchTimeoutMs: 5,
+    });
 
     await expect(
       store.enqueueRows([
@@ -461,19 +486,10 @@ describe("CollectorStore", () => {
   });
 
   it("rejects hinted promotion when the merged type would become JSON", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
-        batchSize: 1,
-        batchTimeoutMs: 5,
-      }),
-    );
+    const { store } = await createStoreHarness({
+      batchSize: 1,
+      batchTimeoutMs: 5,
+    });
 
     await store.enqueueRows([
       createRow("one", { "custom.value": 1 }, "2024-01-01T00:00:00.000Z"),
@@ -492,20 +508,13 @@ describe("CollectorStore", () => {
   });
 
   it("serializes retention alongside ingest", async () => {
-    const schema = new SchemaRegistry(200);
-    await schema.hydrate(database);
-    const catalog = new AttributeCatalog();
-    await catalog.hydrate(database);
     const { logger, infos } = createLogger();
-    const store = new CollectorStore(
-      database,
-      schema,
-      catalog,
-      configOverrides({
+    const { store } = await createStoreHarness(
+      {
         batchSize: 1,
         batchTimeoutMs: 5,
         retentionDays: 30,
-      }),
+      },
       logger,
     );
 
@@ -529,8 +538,11 @@ describe("CollectorStore", () => {
   });
 });
 
-function configOverrides(overrides: Partial<CollectorConfig>): CollectorConfig {
+function configOverrides(
+  overrides: Partial<Extract<CollectorConfig, { storage: "duckdb" }>>,
+): Extract<CollectorConfig, { storage: "duckdb" }> {
   return {
+    storage: "duckdb",
     duckDbPath: "unused",
     port: 4318,
     batchSize: 100,
@@ -542,6 +554,8 @@ function configOverrides(overrides: Partial<CollectorConfig>): CollectorConfig {
     promotionMinRatio: 0.01,
     promotionMaxKeysPerRun: 1,
     queueLimit: 10_000,
+    projectConfigTtlSeconds: 60,
+    projects: [],
     ...overrides,
   };
 }

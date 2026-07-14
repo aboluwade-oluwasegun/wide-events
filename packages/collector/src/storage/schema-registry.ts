@@ -1,9 +1,9 @@
 import {
-  BASELINE_COLUMN_NAMES,
   BASELINE_COLUMN_TYPES,
-  quoteIdentifier
+  isBaselineColumn,
+  type InferredAttributeType,
 } from "@wide-events/internal";
-import type { DuckDbDatabase } from "./database.js";
+import type { CollectorDatabase } from "./types.js";
 
 export class SchemaRegistry {
   private readonly columns = new Map<string, string>();
@@ -14,12 +14,10 @@ export class SchemaRegistry {
     }
   }
 
-  async hydrate(database: DuckDbDatabase): Promise<void> {
-    const rows = await database.executeWriteQuery("PRAGMA table_info('events')");
-
-    for (const row of rows) {
-      const name = expectString(row["name"], "PRAGMA table_info.name");
-      const type = expectString(row["type"], "PRAGMA table_info.type");
+  async hydrate(database: CollectorDatabase): Promise<void> {
+    for (const row of await database.readColumns("events")) {
+      const name = expectString(row.name, "table column name");
+      const type = expectString(row.type, "table column type");
       this.columns.set(name, type);
     }
   }
@@ -40,14 +38,14 @@ export class SchemaRegistry {
 
   promotedColumnCount(): number {
     return [...this.columns.keys()].filter(
-      (name) => !BASELINE_COLUMN_NAMES.includes(name)
+      (name) => !isBaselineColumn(name)
     ).length;
   }
 
   async ensurePromotedColumn(
-    database: DuckDbDatabase,
+    database: CollectorDatabase,
     column: string,
-    type: string
+    type: InferredAttributeType
   ): Promise<boolean> {
     if (this.columns.has(column)) {
       return true;
@@ -57,9 +55,7 @@ export class SchemaRegistry {
       return false;
     }
 
-    await database.execute(
-      `ALTER TABLE events ADD COLUMN IF NOT EXISTS ${quoteIdentifier(column)} ${type}`
-    );
+    await database.addPromotedColumn("events", column, type);
     this.columns.set(column, type);
     return true;
   }

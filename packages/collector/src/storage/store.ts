@@ -1,10 +1,12 @@
 import {
   BASELINE_COLUMN_NAMES,
+  PROJECT_EVENT_COLUMN_NAMES,
   isBaselineColumn,
   isPrimitiveEventValue,
-  quoteIdentifier,
   sanitizeIdentifier,
   type EventPrimitive,
+  type ProjectEventRow,
+  type ProjectEventColumnName,
   type StoredEventRow,
   type InferredAttributeType,
 } from "@wide-events/internal";
@@ -16,15 +18,27 @@ import {
   mergeInferredType,
   type AttributeCatalog
 } from "./attribute-catalog.js";
-import type { DuckDbDatabase } from "./database.js";
+import type { ProjectSchemaRegistry } from "./project-schema-registry.js";
 import type { SchemaRegistry } from "./schema-registry.js";
 import { SerializedExecutor } from "./serialized-executor.js";
+import type { CollectorDatabase, CollectorInsertTableBatch } from "./types.js";
 
 interface PendingBatch {
   rows: StoredEventRow[];
+  projectRows: ProjectEventRow[];
+  rowCount: number;
   resolve: () => void;
   reject: (error: unknown) => void;
 }
+
+export interface StoreIngestBatch {
+  defaultRows: readonly StoredEventRow[];
+  projectRows: readonly ProjectEventRow[];
+}
+
+const PROJECT_EVENT_COLUMN_SET: ReadonlySet<string> = new Set(
+  PROJECT_EVENT_COLUMN_NAMES,
+);
 
 export class CollectorStore {
   private readonly executor = new SerializedExecutor();
@@ -33,22 +47,31 @@ export class CollectorStore {
   private pendingRowCount = 0;
 
   constructor(
-    private readonly database: DuckDbDatabase,
+    private readonly database: CollectorDatabase,
     private readonly schema: SchemaRegistry,
+    private readonly projectSchema: ProjectSchemaRegistry,
     private readonly catalog: AttributeCatalog,
     private readonly config: CollectorConfig,
     private readonly logger: CollectorLogger = noopCollectorLogger,
   ) {}
 
   async enqueueRows(rows: readonly StoredEventRow[]): Promise<void> {
-    if (rows.length === 0) {
+    return await this.enqueueIngestBatch({
+      defaultRows: rows,
+      projectRows: [],
+    });
+  }
+
+  async enqueueIngestBatch(batch: StoreIngestBatch): Promise<void> {
+    const rowCount = batch.defaultRows.length + batch.projectRows.length;
+    if (rowCount === 0) {
       return;
     }
 
-    if (this.pendingRowCount + rows.length > this.config.queueLimit) {
+    if (this.pendingRowCount + rowCount > this.config.queueLimit) {
       this.logger.warn(
         {
-          attemptedRows: rows.length,
+          attemptedRows: rowCount,
           batchSize: this.config.batchSize,
           pendingRowCount: this.pendingRowCount,
           queueLimit: this.config.queueLimit,
@@ -58,18 +81,20 @@ export class CollectorStore {
       throw new QueueLimitExceededError(
         this.config.queueLimit,
         this.pendingRowCount,
-        rows.length,
+        rowCount,
         this.config.batchSize,
       );
     }
 
     return await new Promise<void>((resolve, reject) => {
       this.pending.push({
-        rows: [...rows],
+        rows: [...batch.defaultRows],
+        projectRows: [...batch.projectRows],
+        rowCount,
         resolve,
         reject,
       });
-      this.pendingRowCount += rows.length;
+      this.pendingRowCount += rowCount;
 
       if (this.pendingRowCount >= this.config.batchSize) {
         void this.flushSoon();
@@ -107,10 +132,8 @@ export class CollectorStore {
 
     try {
       await this.executor.enqueue(async () => {
-        await this.database.execute("DELETE FROM events WHERE ts < ?", [
-          cutoff,
-        ]);
-        await this.database.execute("CHECKPOINT");
+        await this.database.deleteEventsBefore(cutoff);
+        await this.database.runRetentionMaintenance();
       });
 
       this.logger.info(
@@ -168,12 +191,11 @@ export class CollectorStore {
             return;
           }
 
-          const { sql, values } = buildBackfillStatement(
+          await this.database.backfillPromotedColumn(
             promoting.sanitizedKey,
             promoting.inferredType,
             promoting.key,
           );
-          await this.database.execute(sql, values);
           await this.catalog.markPromoted(
             this.database,
             promoting.key,
@@ -206,18 +228,29 @@ export class CollectorStore {
     }
 
     const rows = batch.flatMap((entry) => entry.rows);
-    this.pendingRowCount -= rows.length;
+    const projectRows = batch.flatMap((entry) => entry.projectRows);
+    const rowCount = batch.reduce((total, entry) => total + entry.rowCount, 0);
+    this.pendingRowCount -= rowCount;
 
     try {
       await this.executor.enqueue(async () => {
-        await ensureHintedPromotions(
-          this.database,
-          this.schema,
-          this.catalog,
-          rows,
-        );
-        await this.catalog.recordRows(this.database, rows);
-        await insertRows(this.database, this.schema, this.catalog, rows);
+        if (rows.length > 0) {
+          await ensureHintedPromotions(
+            this.database,
+            this.schema,
+            this.catalog,
+            rows,
+          );
+          await this.catalog.recordRows(this.database, rows);
+        }
+        await this.database.writeIngestBatch({
+          eventRows: buildEventInsertBatch(this.catalog, rows),
+          projectEventRows: await buildProjectInsertBatch(
+            this.database,
+            this.projectSchema,
+            projectRows,
+          ),
+        });
       });
 
       for (const entry of batch) {
@@ -232,7 +265,7 @@ export class CollectorStore {
 }
 
 async function ensureHintedPromotions(
-  database: DuckDbDatabase,
+  database: CollectorDatabase,
   schema: SchemaRegistry,
   catalog: AttributeCatalog,
   rows: readonly StoredEventRow[],
@@ -284,56 +317,117 @@ async function ensureHintedPromotions(
   }
 }
 
-async function insertRows(
-  database: DuckDbDatabase,
-  schema: SchemaRegistry,
+function buildEventInsertBatch(
   catalog: AttributeCatalog,
   rows: readonly StoredEventRow[],
-): Promise<void> {
+): CollectorInsertTableBatch | null {
   if (rows.length === 0) {
-    return;
+    return null;
   }
 
   const promotedColumns = catalog.getPromotedColumns();
   const promotedColumnsByName = buildPromotedColumnsByName(promotedColumns);
   const columnNames = collectInsertColumns(rows, promotedColumns);
-  const placeholders = rows
-    .map(() => {
-      const rowPlaceholders = columnNames.map((column) =>
-        column === "attributes_overflow"
-          ? "CAST(CAST(? AS JSON) AS MAP(VARCHAR, JSON))"
-          : "?",
-      );
-      return `(${rowPlaceholders.join(", ")})`;
-    })
-    .join(", ");
-  const sql = `INSERT INTO events (${columnNames
-    .map((column) => quoteIdentifier(column))
-    .join(", ")}) VALUES ${placeholders}`;
+  const insertRows: Array<Record<string, unknown>> = [];
 
-  const values: unknown[] = [];
   for (const row of rows) {
     const overflow = buildOverflowAttributes(row, promotedColumns);
+    const insertRow: Record<string, unknown> = {};
+
     for (const column of columnNames) {
       if (column === "attributes_overflow") {
-        values.push(JSON.stringify(overflow));
+        insertRow[column] = overflow;
         continue;
       }
 
-      if (BASELINE_COLUMN_NAMES.includes(column)) {
-        values.push(serializeRowValue(row[column as keyof StoredEventRow]));
+      if (isBaselineColumn(column)) {
+        insertRow[column] = serializeRowValue(row[column]);
         continue;
       }
 
       const promoted = promotedColumnsByName.get(column);
       const value = promoted ? row.attributes_overflow[promoted.key] : null;
-      values.push(
-        promoted ? normalizePromotedValue(value, promoted.type) : null,
-      );
+      insertRow[column] = promoted ? normalizePromotedValue(value, promoted.type) : null;
     }
+
+    insertRows.push(insertRow);
   }
 
-  await database.execute(sql, values);
+  return {
+    columns: columnNames,
+    rows: insertRows,
+  };
+}
+
+async function buildProjectInsertBatch(
+  database: CollectorDatabase,
+  projectSchema: ProjectSchemaRegistry,
+  rows: readonly ProjectEventRow[],
+): Promise<CollectorInsertTableBatch | null> {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  await projectSchema.ensureProjectColumns(database, rows);
+  const columnNames = collectProjectInsertColumns(rows);
+  const insertRows: Array<Record<string, unknown>> = [];
+
+  for (const row of rows) {
+    const insertRow: Record<string, unknown> = {};
+
+    for (const column of columnNames) {
+      if (column === "project_fields" || column === "project_field_types") {
+        insertRow[column] = row[column];
+        continue;
+      }
+
+      if (isProjectEventColumn(column)) {
+        insertRow[column] = serializeRowValue(row[column]);
+        continue;
+      }
+
+      const projectField = findProjectField(row, column);
+      const type = projectField?.type;
+      const value = projectField?.value;
+      insertRow[column] = normalizeTypedColumnValue(value, type);
+    }
+
+    insertRows.push(insertRow);
+  }
+
+  return {
+    columns: columnNames,
+    rows: insertRows,
+  };
+}
+
+function collectProjectInsertColumns(rows: readonly ProjectEventRow[]): string[] {
+  const columnSet = new Set<string>(PROJECT_EVENT_COLUMN_NAMES);
+  for (const row of rows) {
+    for (const field of Object.keys(row.project_field_types)) {
+      columnSet.add(sanitizeIdentifier(field));
+    }
+  }
+  return [...columnSet].sort();
+}
+
+function isProjectEventColumn(column: string): column is ProjectEventColumnName {
+  return PROJECT_EVENT_COLUMN_SET.has(column);
+}
+
+function findProjectField(
+  row: ProjectEventRow,
+  column: string,
+): { type: string; value: unknown } | null {
+  for (const [field, type] of Object.entries(row.project_field_types)) {
+    if (sanitizeIdentifier(field) === column) {
+      return {
+        type,
+        value: row.project_fields[field],
+      };
+    }
+  }
+  return null;
 }
 
 function collectInsertColumns(
@@ -370,18 +464,25 @@ function serializeRowValue(value: unknown): unknown {
   return JSON.stringify(value);
 }
 
+function normalizeTypedColumnValue(value: unknown, type: string | undefined): unknown {
+  if (!type) {
+    return null;
+  }
+
+  if (type === "JSON") {
+    if (value === null || typeof value === "undefined") {
+      return null;
+    }
+    return typeof value === "string" ? value : JSON.stringify(value);
+  }
+
+  return normalizePromotedValue(value, type);
+}
+
 async function readTotalRetainedRows(
-  database: DuckDbDatabase,
+  database: CollectorDatabase,
 ): Promise<number> {
-  const rows = await database.executeWriteQuery(
-    "SELECT COUNT(*) AS total FROM events",
-  );
-  const total = rows[0]?.["total"];
-  return typeof total === "number"
-    ? total
-    : typeof total === "string"
-      ? Number.parseInt(total, 10)
-      : 0;
+  return await database.countEvents();
 }
 
 function buildOverflowAttributes(
@@ -506,23 +607,4 @@ function normalizePromotedValue(value: unknown, type: string): unknown {
     default:
       return null;
   }
-}
-
-function buildBackfillStatement(
-  column: string,
-  type: string,
-  rawKey: string,
-): { sql: string; values: unknown[] } {
-  const expression =
-    type === "VARCHAR"
-      ? "json_extract_string(map_extract_value(attributes_overflow, ?), '$')"
-      : `TRY_CAST(map_extract_value(attributes_overflow, ?) AS ${type})`;
-
-  return {
-    sql: `UPDATE events
-      SET ${quoteIdentifier(column)} = ${expression}
-      WHERE ${quoteIdentifier(column)} IS NULL
-        AND map_extract_value(attributes_overflow, ?) IS NOT NULL`,
-    values: [rawKey, rawKey],
-  };
 }

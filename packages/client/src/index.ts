@@ -1,6 +1,7 @@
 import type {
   ColumnInfo,
   QueryResult,
+  QuerySource,
   StructuredQuery,
   EventsResult
 } from "@wide-events/internal";
@@ -31,8 +32,9 @@ export class WideEventsClient {
     return await this.postJson<QueryResult>("/sql", { sql });
   }
 
-  async getColumns(): Promise<ColumnInfo[]> {
-    const response = await this.getJson<ColumnsResponse>("/columns");
+  async getColumns(source: QuerySource = "events"): Promise<ColumnInfo[]> {
+    const suffix = source === "events" ? "" : `?source=${encodeURIComponent(source)}`;
+    const response = await this.getJson<ColumnsResponse>(`/columns${suffix}`);
     return response.columns;
   }
 

@@ -11,7 +11,7 @@ export function registerQueryRoutes(
   app.post("/query", async (request) => {
     const query = structuredQuerySchema.parse(request.body);
     validateStructuredQueryFields(query, dependencies);
-    const compiled = compileStructuredQuery(query);
+    const compiled = compileStructuredQuery(query, dependencies.database.queryDialect);
     let rows;
     try {
       rows = await dependencies.database.executeRead(compiled.sql, compiled.params);
@@ -46,6 +46,13 @@ function validateStructuredQueryFields(
   }
 
   for (const field of referencedFields) {
+    if (query.source === "project_events") {
+      if (dependencies.projectSchema.isQueryableColumn(field)) {
+        continue;
+      }
+      throw new BadRequestError(`Unknown project query field "${field}"`);
+    }
+
     if (dependencies.schema.isQueryableColumn(field)) {
       continue;
     }

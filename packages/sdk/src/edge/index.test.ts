@@ -71,4 +71,11 @@ describe("WideEvents edge SDK", () => {
       }),
     );
   });
+
+  it("does not expose manual project annotation", () => {
+    const wide = new WideEvents({ serviceName: "worker" });
+    const methodName = ["annotate", "Project"].join("");
+
+    expect(methodName in wide).toBe(false);
+  });
 });

@@ -1,13 +1,17 @@
 import {
   parseDurationWindow,
-  quoteIdentifier,
   sanitizeIdentifier,
   type EventPrimitive,
   type QueryFilter,
   type QuerySelectItem,
+  type QuerySource,
   type StructuredQuery
 } from "@wide-events/internal";
 import { BadRequestError } from "../errors.js";
+import {
+  duckDbQuerySqlDialect,
+  type QuerySqlDialect
+} from "./dialect.js";
 
 export interface CompiledQuery {
   sql: string;
@@ -18,7 +22,10 @@ const MUTATING_SQL_PATTERN =
   /\b(insert|update|delete|alter|drop|create|replace|truncate|attach|detach|copy)\b/iu;
 const READ_ONLY_SQL_PATTERN = /^(select|with|pragma|describe|show|explain)\b/iu;
 
-export function compileStructuredQuery(query: StructuredQuery): CompiledQuery {
+export function compileStructuredQuery(
+  query: StructuredQuery,
+  dialect: QuerySqlDialect = duckDbQuerySqlDialect
+): CompiledQuery {
   try {
     if (query.select.length === 0) {
       throw new BadRequestError("Structured query must include at least one select item");
@@ -27,11 +34,12 @@ export function compileStructuredQuery(query: StructuredQuery): CompiledQuery {
     const params: EventPrimitive[] = [];
     const whereParts: string[] = [];
     const scope = query.scope ?? "main";
+    const source = query.source ?? "events";
     const filters = [...(query.filters ?? [])];
     const groupByFields = (query.groupBy ?? []).map(sanitizeIdentifier);
     const selectParts = [
-      ...groupByFields.map(quoteSanitizedIdentifier),
-      ...query.select.map(compileSelect)
+      ...groupByFields.map((field) => dialect.quoteIdentifier(field)),
+      ...query.select.map((select) => compileSelect(select, dialect))
     ];
     const selectSql = selectParts.join(", ");
 
@@ -46,22 +54,22 @@ export function compileStructuredQuery(query: StructuredQuery): CompiledQuery {
 
     if (scope === "main") {
       params.push(true);
-      whereParts.push('"main" = ?');
+      whereParts.push(`${dialect.quoteIdentifier("main")} = ?`);
     }
 
     if (query.timeRange) {
       const milliseconds = parseDurationWindow(query.timeRange.last);
       params.push(new Date(Date.now() - milliseconds).toISOString());
-      whereParts.push("ts >= ?");
+      whereParts.push(`${dialect.quoteIdentifier("ts")} >= ?`);
     }
 
     for (const filter of filters) {
-      whereParts.push(compileFilter(filter, params));
+      whereParts.push(compileFilter(filter, params, dialect));
     }
 
-    const groupBy = groupByFields.map(quoteSanitizedIdentifier);
+    const groupBy = groupByFields.map((field) => dialect.quoteIdentifier(field));
     const orderBy = query.orderBy
-      ? ` ORDER BY ${quoteSanitizedIdentifier(sanitizeIdentifier(query.orderBy.field))} ${
+      ? ` ORDER BY ${dialect.quoteIdentifier(sanitizeIdentifier(query.orderBy.field))} ${
           query.orderBy.dir.toUpperCase() === "DESC" ? "DESC" : "ASC"
         }`
       : "";
@@ -71,7 +79,7 @@ export function compileStructuredQuery(query: StructuredQuery): CompiledQuery {
         : "";
 
     const sql =
-      `SELECT ${selectSql} FROM events` +
+      `SELECT ${selectSql} FROM ${querySourceTable(source)}` +
       (whereParts.length > 0 ? ` WHERE ${whereParts.join(" AND ")}` : "") +
       (groupBy.length > 0 ? ` GROUP BY ${groupBy.join(", ")}` : "") +
       orderBy +
@@ -91,6 +99,17 @@ export function compileStructuredQuery(query: StructuredQuery): CompiledQuery {
   }
 }
 
+function querySourceTable(source: QuerySource): string {
+  switch (source) {
+    case "events":
+      return "events";
+    case "project_events":
+      return "project_events";
+    default:
+      return assertNever(source);
+  }
+}
+
 export function assertReadOnlySql(sql: string): void {
   const trimmed = sql.trim();
   if (!READ_ONLY_SQL_PATTERN.test(trimmed) || MUTATING_SQL_PATTERN.test(trimmed)) {
@@ -98,9 +117,9 @@ export function assertReadOnlySql(sql: string): void {
   }
 }
 
-function compileSelect(select: QuerySelectItem): string {
+function compileSelect(select: QuerySelectItem, dialect: QuerySqlDialect): string {
   const alias = select.as
-    ? ` AS ${quoteSanitizedIdentifier(sanitizeIdentifier(select.as))}`
+    ? ` AS ${dialect.quoteIdentifier(sanitizeIdentifier(select.as))}`
     : "";
 
   switch (select.fn) {
@@ -110,13 +129,13 @@ function compileSelect(select: QuerySelectItem): string {
     case "AVG":
     case "MIN":
     case "MAX":
-      return `${select.fn}(${quoteIdentifier(requireField(select))})${alias}`;
+      return `${select.fn}(${dialect.quoteIdentifier(requireField(select))})${alias}`;
     case "P50":
-      return percentileSelect(0.5, select, alias);
+      return percentileSelect(0.5, select, alias, dialect);
     case "P95":
-      return percentileSelect(0.95, select, alias);
+      return percentileSelect(0.95, select, alias, dialect);
     case "P99":
-      return percentileSelect(0.99, select, alias);
+      return percentileSelect(0.99, select, alias, dialect);
     default:
       throw new BadRequestError("Unsupported aggregate");
   }
@@ -125,15 +144,18 @@ function compileSelect(select: QuerySelectItem): string {
 function percentileSelect(
   percentile: number,
   select: QuerySelectItem,
-  alias: string
+  alias: string,
+  dialect: QuerySqlDialect
 ): string {
-  return `PERCENTILE_CONT(${percentile}) WITHIN GROUP (ORDER BY ${quoteSanitizedIdentifier(
-    requireField(select)
-  )})${alias}`;
+  return dialect.percentileSelect(percentile, requireField(select), alias);
 }
 
-function compileFilter(filter: QueryFilter, params: EventPrimitive[]): string {
-  const field = quoteSanitizedIdentifier(sanitizeFilterField(filter));
+function compileFilter(
+  filter: QueryFilter,
+  params: EventPrimitive[],
+  dialect: QuerySqlDialect,
+): string {
+  const field = dialect.quoteIdentifier(sanitizeFilterField(filter));
 
   switch (filter.op) {
     case "eq":
@@ -190,6 +212,6 @@ function sanitizeFilterField(filter: QueryFilter): string {
   return sanitizeIdentifier(filter.field);
 }
 
-function quoteSanitizedIdentifier(identifier: string): string {
-  return `"${identifier}"`;
+function assertNever(value: never): never {
+  throw new BadRequestError(`Unsupported query source: ${String(value)}`);
 }

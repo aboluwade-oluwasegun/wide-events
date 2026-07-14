@@ -9,6 +9,12 @@ import { normalizeAttributes, type AnnotateOptions, type AnnotationAttributes } 
 import { wrapFetch as wrapFetchInstrumentation } from "./instrumentation/fetch.js";
 import { postJson } from "./http.js";
 import { createCorrelationId, createEventId } from "./ids.js";
+import {
+  ProjectRulesManager,
+  type ProjectExtractionRule,
+} from "./project-rules.js";
+import type { ProjectExtractionMetadata } from "./project-extraction.js";
+import type { ProjectRoutingOption } from "./projects.js";
 
 export interface WideEventContext {
   event: WideEvent;
@@ -30,9 +36,12 @@ export interface CoreWideEventsOptions {
   serviceName: string;
   environment: string;
   collectorUrl?: string | undefined;
+  apiKey?: string | undefined;
+  apiUrl?: string | undefined;
   sampleRate: number;
   disabled: boolean;
   batchSize: number;
+  projects: ProjectRoutingOption;
   fetchImpl?: typeof fetch | undefined;
   sink?: WideEventSink | undefined;
 }
@@ -44,7 +53,9 @@ export interface RecordErrorOptions {
 
 export class CoreWideEvents {
   private readonly fetchImpl: typeof fetch;
+  private readonly projectRules: ProjectRulesManager;
   private readonly queue: WideEvent[] = [];
+  private flushPromise: Promise<void> | null = null;
   private patchedFetch: typeof fetch | null = null;
 
   constructor(
@@ -52,6 +63,12 @@ export class CoreWideEvents {
     private readonly storage: ContextStorage,
   ) {
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.projectRules = new ProjectRulesManager({
+      projects: options.projects,
+      apiKey: options.apiKey,
+      apiUrl: options.apiUrl,
+      fetchImpl: this.fetchImpl,
+    });
   }
 
   createContext(initial: Partial<WideEvent> = {}): WideEventContext {
@@ -117,6 +134,36 @@ export class CoreWideEvents {
     }
   }
 
+  async getProjectRules(): Promise<readonly ProjectExtractionRule[]> {
+    return await this.projectRules.getRules();
+  }
+
+  currentProjectRules(): readonly ProjectExtractionRule[] {
+    return this.projectRules.currentRules();
+  }
+
+  refreshProjectRules(): void {
+    this.projectRules.refreshSoon();
+  }
+
+  applyProjectMetadata(metadata: ProjectExtractionMetadata): void {
+    const context = this.storage.getStore();
+    if (!context || this.options.disabled) {
+      return;
+    }
+
+    context.event.project_id = metadata.project_id;
+    context.event.project_rule_version = metadata.project_rule_version;
+    context.event.project_fields = {
+      ...(context.event.project_fields ?? {}),
+      ...(metadata.project_fields ?? {}),
+    };
+    context.event.project_field_types = {
+      ...(context.event.project_field_types ?? {}),
+      ...(metadata.project_field_types ?? {}),
+    };
+  }
+
   push(key: string, value: EventValue): void {
     const context = this.storage.getStore();
     if (!context || this.options.disabled) {
@@ -173,22 +220,42 @@ export class CoreWideEvents {
 
     this.queue.push(event);
     if (this.queue.length >= this.options.batchSize) {
-      void this.flush();
+      this.flushInBackground();
     }
   }
 
+  flushInBackground(): void {
+    void this.flush().catch(() => undefined);
+  }
+
   async flush(): Promise<void> {
+    if (this.flushPromise) {
+      await this.flushPromise;
+      return;
+    }
+
+    this.flushPromise = this.flushQueue();
+    try {
+      await this.flushPromise;
+    } finally {
+      this.flushPromise = null;
+    }
+  }
+
+  private async flushQueue(): Promise<void> {
     if (this.queue.length === 0 || this.options.disabled) {
       return;
     }
 
-    const events = this.queue.splice(0, this.queue.length);
+    const events = this.queue.slice();
     if (this.options.sink) {
       await this.options.sink.write(events);
+      this.queue.splice(0, events.length);
       return;
     }
 
     if (!this.options.collectorUrl) {
+      this.queue.splice(0, events.length);
       return;
     }
 
@@ -197,6 +264,7 @@ export class CoreWideEvents {
       `${this.options.collectorUrl.replace(/\/$/u, "")}/v1/events`,
       { events },
     );
+    this.queue.splice(0, events.length);
   }
 
   async shutdown(): Promise<void> {

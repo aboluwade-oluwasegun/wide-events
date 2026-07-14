@@ -7,7 +7,7 @@ import {
   type WideEventSink,
 } from "../shared/core.js";
 import {
-  edgeOptionsSchema,
+  resolveEdgeOptions,
   type EdgeWideEventsOptions,
   type ResolvedEdgeWideEventsOptions,
 } from "../shared/options.js";
@@ -39,11 +39,7 @@ export class WideEvents {
   private readonly core: CoreWideEvents;
 
   constructor(options: EdgeWideEventsOptions) {
-    this.options = {
-      ...edgeOptionsSchema.parse(options),
-      fetchImpl: options.fetchImpl,
-      sink: options.sink,
-    };
+    this.options = resolveEdgeOptions(options);
     this.core = new CoreWideEvents(this.options, this.storage);
 
     if (this.options.autoInstrument.fetch) {
@@ -63,6 +59,8 @@ export class WideEvents {
   push: CoreWideEvents["push"] = (...args) => this.core.push(...args);
   recordError: CoreWideEvents["recordError"] = (...args) => this.core.recordError(...args);
   wrapFetch: CoreWideEvents["wrapFetch"] = (...args) => this.core.wrapFetch(...args);
+  getProjectRules: CoreWideEvents["getProjectRules"] = (...args) =>
+    this.core.getProjectRules(...args);
   instrumentFetch(): void {
     this.core.instrumentFetch();
   }
@@ -125,3 +123,27 @@ function createRequestEvent(request: Request): Partial<WideEvent> {
 }
 
 export type { EdgeWideEventsOptions, WideEventSink, RecordErrorOptions };
+export type {
+  ProjectRoutingOption,
+} from "../shared/projects.js";
+export {
+  ProjectRulesManager,
+  parseProjectRulesDocument,
+} from "../shared/project-rules.js";
+export {
+  extractProjectMetadata,
+  findMatchingProjectRule,
+} from "../shared/project-extraction.js";
+export type {
+  ProjectExtractionRule,
+  ProjectRuleField,
+  ProjectRuleFieldSource,
+  ProjectRuleMatch,
+  ProjectRulesDocument,
+} from "../shared/project-rules.js";
+export type {
+  ProjectExtractionContext,
+  ProjectExtractionMetadata,
+  ProjectExtractionRequest,
+  ProjectExtractionResponse,
+} from "../shared/project-extraction.js";

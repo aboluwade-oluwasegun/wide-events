@@ -1,6 +1,6 @@
 # @wide-events/sdk
 
-Lightweight structured event SDK for Node, Lambda, and edge runtimes.
+Structured event SDK for Node, Lambda, and edge runtimes.
 
 ## Install
 
@@ -42,16 +42,15 @@ app.post("/orders", async (req, res) => {
 ## Lambda
 
 ```ts
+import { WideEvents } from "@wide-events/sdk";
+
 const wideEvents = new WideEvents({
   serviceName: "orders-lambda",
   collectorUrl: process.env.WIDE_EVENTS_COLLECTOR_URL,
 });
 
 export const handler = wideEvents.wrapHandler(async (event) => {
-  wideEvents.annotate({
-    "http.route": event.rawPath,
-  });
-
+  wideEvents.annotate({ "http.route": event.rawPath });
   return { statusCode: 200, body: "ok" };
 });
 ```
@@ -75,93 +74,68 @@ export default {
 };
 ```
 
+## Core API
+
+| Method | Purpose |
+| --- | --- |
+| `run(initial, callback)` | Manually create an event context. |
+| `middleware()` | Node request lifecycle middleware. |
+| `route(handler)` | Wrap a Node HTTP route handler with event lifecycle and error capture. |
+| `expressMiddleware()` / `fastifyPlugin()` | Express and Fastify request lifecycle adapters. |
+| `honoMiddleware()` / `nestMiddleware()` / `nestInterceptor()` | Hono and Nest request lifecycle adapters. |
+| `wrapHandler(handler)` | Lambda-style event lifecycle wrapper. |
+| `fetchHandler(request, ctx, handler)` | Edge request lifecycle helper. |
+| `annotate(attributes, options?)` | Add structured fields to the active event. |
+| `push(key, value)` | Append repeated nested values such as DB calls. |
+| `recordError(error, options?)` | Record an error on the active event. |
+| `current()` | Return the current materialized event, if one is active. |
+| `wrapFetch(fetch?)` / `instrumentFetch()` | Instrument outbound fetch calls. |
+| `restoreFetch()` | Restore a patched global fetch. |
+| `flush()` / `forceFlush()` | Send queued events to the collector. |
+| `shutdown()` | Restore patched fetch and flush queued events. |
+
+Automatic exception details are guaranteed only when the SDK owns the execution boundary. Plain Node middleware marks `status >= 500` responses as failed; use platform wrappers when you need thrown-error details without manual `recordError()`.
+
 ## Instrumentation
 
-Instrumentation is Node-only and client-driven for database/cache/aws clients. The preferred API is a constructor-level instrumentation object:
+Node-only integrations can be configured when the SDK is created:
 
 ```ts
-import { WideEvents } from "@wide-events/sdk";
-import { Pool } from "pg";
-import Redis from "ioredis";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
-
-const pool = new Pool({ connectionString: process.env["DATABASE_URL"] });
-const redis = new Redis(process.env["REDIS_URL"] ?? "");
-const dynamo = new DynamoDBClient({});
-
 const wideEvents = new WideEvents(
   { serviceName: "api", collectorUrl },
   {
     fetch: true,
     pg: [pool],
     redis: [redis],
-    aws: [dynamo], // instrument base AWS SDK v3 client
+    aws: [dynamoClient],
   },
 );
-
-const doc = DynamoDBDocumentClient.from(dynamo);
 ```
 
-`fetch` in the second argument is equivalent to `autoInstrument.fetch` in the core options (kept for backward compatibility). If both are present, the second argument value is used.
+Manual installers are also available as subpaths:
 
-You can still instrument manually with subpath installers when you want per-client options:
+- `@wide-events/sdk/instrumentation/pg`
+- `@wide-events/sdk/instrumentation/aws-sdk-v3`
+- `@wide-events/sdk/instrumentation/ioredis`
 
-```ts
-import { instrumentPg } from "@wide-events/sdk/instrumentation/pg";
-import { instrumentAwsSdkV3 } from "@wide-events/sdk/instrumentation/aws-sdk-v3";
-import { instrumentIoredis } from "@wide-events/sdk/instrumentation/ioredis";
+Emitted attribute arrays use these keys:
 
-instrumentPg(pool, wideEvents, { sqlTruncateLength: 120 });
-instrumentIoredis(redis, wideEvents);
-instrumentAwsSdkV3(dynamo, wideEvents);
-```
-
-Node-only integrations are exposed as package subpaths so edge bundles never pull TCP clients:
-
-```bash
-npm install @wide-events/sdk pg ioredis
-npm install @wide-events/sdk @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb
-```
-
-Typing strategy keeps the SDK small:
-
-- `pg` / `ioredis` use official library types in constructor and installer signatures for strong autocomplete.
-- AWS SDK v3 uses a lightweight hybrid client contract (`AwsSdkV3ClientTarget`) to stay compatible across Smithy overloads without adding heavy dependency coupling.
-
-`WideEvents` satisfies `InstrumentationHooks`, so helper functions can stay generic:
-
-```ts
-import type { InstrumentationHooks } from "@wide-events/sdk";
-
-function helper(hooks: InstrumentationHooks, pool: Pool) {
-  instrumentPg(pool, hooks);
-}
-```
-
-Emitted **attribute arrays** use dotted keys aligned with outbound HTTP instrumentation:
-
-| Subpath | Success key | Failure key |
+| Integration | Success key | Failure key |
 | --- | --- | --- |
-| (fetch / SDK) | `http.client.requests` | `http.client.errors` |
-| `@wide-events/sdk/instrumentation/pg` | `db.queries` | `db.errors` |
-| `@wide-events/sdk/instrumentation/aws-sdk-v3` | `aws.client.operations` | `aws.client.errors` |
-| `@wide-events/sdk/instrumentation/ioredis` | `redis.commands` | `redis.errors` |
+| fetch | `http.client.requests` | `http.client.errors` |
+| Postgres | `db.queries` | `db.errors` |
+| AWS SDK v3 | `aws.client.operations` | `aws.client.errors` |
+| ioredis | `redis.commands` | `redis.errors` |
 
-## API
+See the [Node service example](../../examples/node-service/README.md) for optional Postgres, Redis, and DynamoDB snippets.
 
-| Method | Purpose |
-| --- | --- |
-| `middleware()` | Creates Node request middleware and flushes an event on response finish. |
-| `wrapHandler(handler)` | Wraps Lambda-style handlers with event lifecycle, error capture, and flush. |
-| `fetchHandler(request, ctx, handler)` | Edge request lifecycle helper. |
-| `annotate(attributes, options?)` | Adds structured fields to the active event. |
-| `push(key, value)` | Appends nested values, useful for repeated operations like DB calls. |
-| `recordError(error, options?)` | Records an error on the active event. |
-| `current()` | Returns the current materialized event, if one is active. |
-| `wrapFetch(fetch?)` | Returns an instrumented fetch function. |
-| `instrumentFetch()` | Wraps `globalThis.fetch` for fetch-based HTTP clients. |
-| `flush()` / `forceFlush()` | Sends queued events to the collector. |
-| `shutdown()` | Restores patched fetch and flushes queued events. |
+## Framework Adapters
 
-Automatic exception details are guaranteed only where the SDK owns the execution boundary. Plain Node middleware marks `status >= 500` as failed; use route wrappers or platform wrappers for thrown-error details.
+Use the framework-specific helpers when you want request lifecycle integration without wiring the generic middleware yourself:
+
+```ts
+app.use(wideEvents.expressMiddleware());
+await fastify.register(wideEvents.fastifyPlugin());
+```
+
+Hono and Nest helpers are exported as `honoMiddleware()`, `nestMiddleware()`, and `nestInterceptor()`.

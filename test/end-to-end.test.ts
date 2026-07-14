@@ -237,9 +237,10 @@ function createEvent(): APIGatewayProxyEventV2WithRequestContext<APIGatewayEvent
 }
 
 function createTestCollectorConfig(
-  overrides: Partial<CollectorConfig>,
-): CollectorConfig {
+  overrides: Partial<Extract<CollectorConfig, { storage: "duckdb" }>>,
+): Extract<CollectorConfig, { storage: "duckdb" }> {
   return {
+    storage: "duckdb",
     duckDbPath: "unused",
     port: 4318,
     batchSize: 100,
@@ -251,6 +252,8 @@ function createTestCollectorConfig(
     promotionMinRatio: 0.01,
     promotionMaxKeysPerRun: 1,
     queueLimit: 10_000,
+    projectConfigTtlSeconds: 60,
+    projects: [],
     ...overrides,
   };
 }

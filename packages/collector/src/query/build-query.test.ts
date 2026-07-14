@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assertReadOnlySql, compileStructuredQuery } from "./build-query";
+import { clickHouseQuerySqlDialect } from "./dialect";
 
 describe("compileStructuredQuery", () => {
   it("defaults structured queries to main=true scope", () => {
@@ -71,6 +72,42 @@ describe("compileStructuredQuery", () => {
     expect(compiled.sql).toContain('GROUP BY "http.route"');
     expect(compiled.sql).toContain('ORDER BY "duration.max" ASC');
     expect(compiled.params).toEqual(["api"]);
+  });
+
+  it("compiles ClickHouse-specific percentiles and identifier quotes", () => {
+    const compiled = compileStructuredQuery(
+      {
+        select: [{ fn: "P95", field: "duration_ms", as: "p95_ms" }],
+        filters: [{ field: "service.name", op: "eq", value: "api" }],
+        groupBy: ["http.route"],
+        orderBy: { field: "p95_ms", dir: "desc" },
+        scope: "all"
+      },
+      clickHouseQuerySqlDialect
+    );
+
+    expect(compiled.sql).toContain(
+      "SELECT `http.route`, quantile(0.95)(`duration_ms`) AS `p95_ms`"
+    );
+    expect(compiled.sql).toContain("WHERE `service.name` = ?");
+    expect(compiled.sql).toContain("GROUP BY `http.route`");
+    expect(compiled.sql).toContain("ORDER BY `p95_ms` DESC");
+    expect(compiled.params).toEqual(["api"]);
+  });
+
+  it("targets project_events when requested", () => {
+    const compiled = compileStructuredQuery({
+      source: "project_events",
+      select: [{ fn: "COUNT", as: "total" }],
+      filters: [{ field: "project_id", op: "eq", value: "project_123" }],
+      groupBy: ["project_id"],
+      scope: "all",
+    });
+
+    expect(compiled.sql).toContain("FROM project_events");
+    expect(compiled.sql).toContain('WHERE "project_id" = ?');
+    expect(compiled.sql).toContain('GROUP BY "project_id"');
+    expect(compiled.params).toEqual(["project_123"]);
   });
 });
 
