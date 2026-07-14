@@ -21,7 +21,7 @@ import {
 import type { ProjectSchemaRegistry } from "./project-schema-registry.js";
 import type { SchemaRegistry } from "./schema-registry.js";
 import { SerializedExecutor } from "./serialized-executor.js";
-import type { CollectorDatabase } from "./types.js";
+import type { CollectorDatabase, CollectorInsertTableBatch } from "./types.js";
 
 interface PendingBatch {
   rows: StoredEventRow[];
@@ -242,9 +242,15 @@ export class CollectorStore {
             rows,
           );
           await this.catalog.recordRows(this.database, rows);
-          await insertRows(this.database, this.schema, this.catalog, rows);
         }
-        await insertProjectRows(this.database, this.projectSchema, projectRows);
+        await this.database.writeIngestBatch({
+          eventRows: buildEventInsertBatch(this.catalog, rows),
+          projectEventRows: await buildProjectInsertBatch(
+            this.database,
+            this.projectSchema,
+            projectRows,
+          ),
+        });
       });
 
       for (const entry of batch) {
@@ -311,14 +317,12 @@ async function ensureHintedPromotions(
   }
 }
 
-async function insertRows(
-  database: CollectorDatabase,
-  schema: SchemaRegistry,
+function buildEventInsertBatch(
   catalog: AttributeCatalog,
   rows: readonly StoredEventRow[],
-): Promise<void> {
+): CollectorInsertTableBatch | null {
   if (rows.length === 0) {
-    return;
+    return null;
   }
 
   const promotedColumns = catalog.getPromotedColumns();
@@ -349,16 +353,19 @@ async function insertRows(
     insertRows.push(insertRow);
   }
 
-  await database.insertEventRows(columnNames, insertRows);
+  return {
+    columns: columnNames,
+    rows: insertRows,
+  };
 }
 
-async function insertProjectRows(
+async function buildProjectInsertBatch(
   database: CollectorDatabase,
   projectSchema: ProjectSchemaRegistry,
   rows: readonly ProjectEventRow[],
-): Promise<void> {
+): Promise<CollectorInsertTableBatch | null> {
   if (rows.length === 0) {
-    return;
+    return null;
   }
 
   await projectSchema.ensureProjectColumns(database, rows);
@@ -388,7 +395,10 @@ async function insertProjectRows(
     insertRows.push(insertRow);
   }
 
-  await database.insertProjectEventRows(columnNames, insertRows);
+  return {
+    columns: columnNames,
+    rows: insertRows,
+  };
 }
 
 function collectProjectInsertColumns(rows: readonly ProjectEventRow[]): string[] {

@@ -26,6 +26,7 @@ describe("WideEvents Hono adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const context = createHonoContext({
       method: "POST",
       path: "/checkout",
@@ -95,6 +96,7 @@ describe("WideEvents Hono adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const context = createHonoContext({
       method: "POST",
       path: "/checkout",
@@ -153,6 +155,7 @@ describe("WideEvents Hono adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const context = createHonoContext({
       method: "GET",
       path: "/health",

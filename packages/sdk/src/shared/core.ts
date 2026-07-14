@@ -3,8 +3,6 @@ import {
   normalizeEventPrimitive,
   type DynamicEventAttributes,
   type EventValue,
-  type ProjectFieldTypes,
-  type ProjectFields,
   type WideEvent,
 } from "@wide-events/internal";
 import { normalizeAttributes, type AnnotateOptions, type AnnotationAttributes } from "./attributes.js";
@@ -16,12 +14,7 @@ import {
   type ProjectExtractionRule,
 } from "./project-rules.js";
 import type { ProjectExtractionMetadata } from "./project-extraction.js";
-import {
-  ProjectRoutingManager,
-  type AnnotateProjectOptions,
-  type ProjectAnnotationFields,
-  type ProjectRoutingOption,
-} from "./projects.js";
+import type { ProjectRoutingOption } from "./projects.js";
 
 export interface WideEventContext {
   event: WideEvent;
@@ -60,9 +53,9 @@ export interface RecordErrorOptions {
 
 export class CoreWideEvents {
   private readonly fetchImpl: typeof fetch;
-  private readonly projectRouting: ProjectRoutingManager;
   private readonly projectRules: ProjectRulesManager;
   private readonly queue: WideEvent[] = [];
+  private flushPromise: Promise<void> | null = null;
   private patchedFetch: typeof fetch | null = null;
 
   constructor(
@@ -75,10 +68,6 @@ export class CoreWideEvents {
       apiKey: options.apiKey,
       apiUrl: options.apiUrl,
       fetchImpl: this.fetchImpl,
-    });
-    this.projectRouting = new ProjectRoutingManager({
-      projects: options.projects,
-      resolveProjects: () => this.projectRules.getProjects(),
     });
   }
 
@@ -101,10 +90,6 @@ export class CoreWideEvents {
         "http.request.method": initial["http.request.method"] ?? null,
         error: initial.error ?? null,
         "exception.slug": initial["exception.slug"] ?? null,
-        project_id: initial.project_id,
-        project_rule_version: initial.project_rule_version,
-        project_fields: initial.project_fields,
-        project_field_types: initial.project_field_types,
       },
       attributes: { ...(initial.attributes ?? {}) },
       promote: new Set(initial.promote ?? []),
@@ -149,31 +134,16 @@ export class CoreWideEvents {
     }
   }
 
-  annotateProject<TFields extends ProjectAnnotationFields>(
-    fields: TFields,
-    options?: AnnotateProjectOptions<TFields>,
-  ): void {
-    const context = this.storage.getStore();
-    if (!context || this.options.disabled) {
-      return;
-    }
-
-    const annotation = this.projectRouting.prepareProjectAnnotation(fields, options);
-    context.event.project_id = annotation.project_id ?? context.event.project_id;
-    context.event.project_rule_version =
-      annotation.project_rule_version ?? context.event.project_rule_version;
-    context.event.project_fields = {
-      ...(context.event.project_fields ?? {}),
-      ...annotation.project_fields,
-    };
-    context.event.project_field_types = {
-      ...(context.event.project_field_types ?? {}),
-      ...annotation.project_field_types,
-    };
-  }
-
   async getProjectRules(): Promise<readonly ProjectExtractionRule[]> {
     return await this.projectRules.getRules();
+  }
+
+  currentProjectRules(): readonly ProjectExtractionRule[] {
+    return this.projectRules.currentRules();
+  }
+
+  refreshProjectRules(): void {
+    this.projectRules.refreshSoon();
   }
 
   applyProjectMetadata(metadata: ProjectExtractionMetadata): void {
@@ -250,31 +220,51 @@ export class CoreWideEvents {
 
     this.queue.push(event);
     if (this.queue.length >= this.options.batchSize) {
-      void this.flush();
+      this.flushInBackground();
     }
   }
 
+  flushInBackground(): void {
+    void this.flush().catch(() => undefined);
+  }
+
   async flush(): Promise<void> {
+    if (this.flushPromise) {
+      await this.flushPromise;
+      return;
+    }
+
+    this.flushPromise = this.flushQueue();
+    try {
+      await this.flushPromise;
+    } finally {
+      this.flushPromise = null;
+    }
+  }
+
+  private async flushQueue(): Promise<void> {
     if (this.queue.length === 0 || this.options.disabled) {
       return;
     }
 
-    const events = this.queue.splice(0, this.queue.length);
-    const preparedEvents = await this.projectRouting.prepareEvents(events);
+    const events = this.queue.slice();
     if (this.options.sink) {
-      await this.options.sink.write(preparedEvents);
+      await this.options.sink.write(events);
+      this.queue.splice(0, events.length);
       return;
     }
 
     if (!this.options.collectorUrl) {
+      this.queue.splice(0, events.length);
       return;
     }
 
     await postJson(
       this.fetchImpl,
       `${this.options.collectorUrl.replace(/\/$/u, "")}/v1/events`,
-      { events: preparedEvents },
+      { events },
     );
+    this.queue.splice(0, events.length);
   }
 
   async shutdown(): Promise<void> {
@@ -376,51 +366,10 @@ function setField(context: WideEventContext, key: string, value: EventValue): vo
     case "error":
       context.event.error = typeof value === "boolean" ? value : null;
       break;
-    case "project_id":
-      context.event.project_id = typeof value === "string" ? value : undefined;
-      break;
-    case "project_rule_version":
-      context.event.project_rule_version = typeof value === "string" ? value : undefined;
-      break;
-    case "project_fields":
-      context.event.project_fields = toProjectFields(value);
-      break;
-    case "project_field_types":
-      context.event.project_field_types = toProjectFieldTypes(value);
-      break;
     default:
       context.attributes[key] = value;
       break;
   }
-}
-
-function toProjectFields(value: EventValue): ProjectFields | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-
-  return value as ProjectFields;
-}
-
-function toProjectFieldTypes(value: EventValue): ProjectFieldTypes | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const fieldTypes: ProjectFieldTypes = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (
-      entry === "BOOLEAN" ||
-      entry === "BIGINT" ||
-      entry === "DOUBLE" ||
-      entry === "VARCHAR" ||
-      entry === "JSON"
-    ) {
-      fieldTypes[key] = entry;
-    }
-  }
-
-  return fieldTypes;
 }
 
 function normalizeError(

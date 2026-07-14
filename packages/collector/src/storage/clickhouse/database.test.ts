@@ -153,20 +153,22 @@ WHERE isNull(\`custom.count\`)
       () => client,
     );
 
-    await database.insertEventRows(
-      ["event_id", "attributes_overflow", "duration_ms"],
-      [
-        {
-          event_id: "event-1",
-          duration_ms: 12.5,
-          attributes_overflow: {
-            "custom.count": 2,
-            "custom.name": "alpha",
-            "custom.null": null,
+    await database.writeIngestBatch({
+      eventRows: {
+        columns: ["event_id", "attributes_overflow", "duration_ms"],
+        rows: [
+          {
+            event_id: "event-1",
+            duration_ms: 12.5,
+            attributes_overflow: {
+              "custom.count": 2,
+              "custom.name": "alpha",
+              "custom.null": null,
+            },
           },
-        },
-      ],
-    );
+        ],
+      },
+    });
 
     expect(client.insert).toHaveBeenCalledWith({
       table: "`wide_events`.`events`",
@@ -193,32 +195,34 @@ WHERE isNull(\`custom.count\`)
       () => client,
     );
 
-    await database.insertProjectEventRows(
-      [
-        "event_id",
-        "correlation_id",
-        "ts",
-        "project_id",
-        "project_fields",
-        "project_field_types",
-      ],
-      [
-        {
-          event_id: "event-project",
-          correlation_id: "corr-project",
-          ts: "2024-01-01T00:00:00.000Z",
-          project_id: "project_123",
-          project_fields: {
-            "order.total": 42.5,
-            "payload.raw": { sku: "sku_123" },
+    await database.writeIngestBatch({
+      projectEventRows: {
+        columns: [
+          "event_id",
+          "correlation_id",
+          "ts",
+          "project_id",
+          "project_fields",
+          "project_field_types",
+        ],
+        rows: [
+          {
+            event_id: "event-project",
+            correlation_id: "corr-project",
+            ts: "2024-01-01T00:00:00.000Z",
+            project_id: "project_123",
+            project_fields: {
+              "order.total": 42.5,
+              "payload.raw": { sku: "sku_123" },
+            },
+            project_field_types: {
+              "order.total": "DOUBLE",
+              "payload.raw": "JSON",
+            },
           },
-          project_field_types: {
-            "order.total": "DOUBLE",
-            "payload.raw": "JSON",
-          },
-        },
-      ],
-    );
+        ],
+      },
+    });
 
     expect(client.insert).toHaveBeenCalledWith({
       table: "`wide_events`.`project_events`",

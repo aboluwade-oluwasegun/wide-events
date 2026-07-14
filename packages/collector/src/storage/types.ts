@@ -7,6 +7,16 @@ import type { QuerySqlDialect } from "../query/dialect.js";
 
 export type CollectorInsertRow = Record<string, unknown>;
 
+export interface CollectorInsertTableBatch {
+  columns: readonly string[];
+  rows: readonly CollectorInsertRow[];
+}
+
+export interface CollectorIngestBatch {
+  eventRows?: CollectorInsertTableBatch | null | undefined;
+  projectEventRows?: CollectorInsertTableBatch | null | undefined;
+}
+
 export interface CollectorTableColumn {
   name: string;
   type: string;
@@ -26,14 +36,7 @@ export interface CollectorDatabase {
     type: InferredAttributeType,
     rawKey: string,
   ): Promise<void>;
-  insertEventRows(
-    columns: readonly string[],
-    rows: readonly CollectorInsertRow[],
-  ): Promise<void>;
-  insertProjectEventRows(
-    columns: readonly string[],
-    rows: readonly CollectorInsertRow[],
-  ): Promise<void>;
+  writeIngestBatch(batch: CollectorIngestBatch): Promise<void>;
   loadAttributeCatalog(): Promise<AttributeCatalogEntry[]>;
   saveAttributeCatalogEntry(entry: AttributeCatalogEntry): Promise<void>;
   deleteEventsBefore(cutoff: string): Promise<void>;

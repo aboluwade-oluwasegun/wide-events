@@ -63,8 +63,7 @@ function createMockDatabase(): CollectorDatabase {
     },
     async addPromotedColumn() {},
     async backfillPromotedColumn() {},
-    async insertEventRows() {},
-    async insertProjectEventRows() {},
+    async writeIngestBatch() {},
     async loadAttributeCatalog() {
       return [];
     },

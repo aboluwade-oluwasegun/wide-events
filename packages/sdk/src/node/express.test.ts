@@ -48,6 +48,7 @@ describe("WideEvents Express adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const response = new FakeExpressResponse();
 
     await invokeExpress(wide, {
@@ -106,6 +107,7 @@ describe("WideEvents Express adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const response = new FakeExpressResponse();
     response.statusCode = 201;
 
@@ -156,6 +158,7 @@ describe("WideEvents Express adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const response = new FakeExpressResponse();
 
     await invokeExpress(wide, {
@@ -212,6 +215,69 @@ describe("WideEvents Express adapter", () => {
     expect(exportedEvents[0]?.project_id).toBeUndefined();
     expect(exportedEvents[0]?.project_fields).toBeUndefined();
     expect(exportedEvents[0]?.project_field_types).toBeUndefined();
+  });
+
+  it("starts project discovery without blocking cold-cache Express requests", async () => {
+    const exportedEvents: WideEvent[] = [];
+    const discovery = createDeferred<Response>();
+    const fetchImpl = vi.fn<typeof fetch>().mockReturnValue(discovery.promise);
+    const rulesDocument = {
+      version: 1,
+      rules: [
+        {
+          project_id: "project_checkout",
+          project_rule_version: "rules-v1",
+          match: {
+            method: "POST",
+            path: "/checkout",
+          },
+          fields: [
+            {
+              field: "cart.item_count",
+              source: "request.body",
+              path: "cart.itemCount",
+              type: "BIGINT",
+            },
+          ],
+        },
+      ],
+    };
+    const wide = createExpressWideEvents(exportedEvents, rulesDocument, fetchImpl);
+    const response = new FakeExpressResponse();
+    let handlerCalled = false;
+
+    await invokeExpress(wide, {
+      method: "POST",
+      url: "/checkout",
+      path: "/checkout",
+      body: {
+        cart: {
+          itemCount: 2,
+        },
+      },
+    }, response, () => {
+      handlerCalled = true;
+      response.send("ok");
+    });
+
+    expect(handlerCalled).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await waitFor(() => exportedEvents.length === 1);
+    expect(exportedEvents[0]?.project_id).toBeUndefined();
+    expect(exportedEvents[0]?.project_fields).toBeUndefined();
+
+    discovery.resolve(
+      new Response(JSON.stringify(createProjectDiscoveryResponse(rulesDocument)), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await expect(wide.getProjectRules()).resolves.toEqual([
+      expect.objectContaining({
+        project_id: "project_checkout",
+        project_rule_version: "rules-v1",
+      }),
+    ]);
   });
 });
 
@@ -295,6 +361,18 @@ function createProjectDiscoveryResponse(rulesDocument: unknown): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+
+  return { promise, resolve };
 }
 
 async function invokeExpress(

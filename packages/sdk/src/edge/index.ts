@@ -56,8 +56,6 @@ export class WideEvents {
   }
 
   annotate: CoreWideEvents["annotate"] = (...args) => this.core.annotate(...args);
-  annotateProject: CoreWideEvents["annotateProject"] = (...args) =>
-    this.core.annotateProject(...args);
   push: CoreWideEvents["push"] = (...args) => this.core.push(...args);
   recordError: CoreWideEvents["recordError"] = (...args) => this.core.recordError(...args);
   wrapFetch: CoreWideEvents["wrapFetch"] = (...args) => this.core.wrapFetch(...args);
@@ -126,8 +124,6 @@ function createRequestEvent(request: Request): Partial<WideEvent> {
 
 export type { EdgeWideEventsOptions, WideEventSink, RecordErrorOptions };
 export type {
-  AnnotateProjectOptions,
-  ProjectAnnotationFields,
   ProjectRoutingOption,
 } from "../shared/projects.js";
 export {

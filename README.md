@@ -1,58 +1,43 @@
 # wide-events
 
-Self-hosted structured event observability on DuckDB by default, with optional ClickHouse storage for higher-ingest deployments.
+Self-hosted structured event observability for Node, Lambda, and edge apps.
 
-`wide-events` stores one row per wide event. Applications send native JSON events to the collector, the collector writes them into the configured analytical backend, and the query API supports product-style questions over high-cardinality fields. Stable dynamic fields can be promoted into typed columns; overflow fields remain available through SQL.
+Applications send native JSON events to a collector. The collector stores one row per event in an analytical backend, DuckDB by default, and exposes query APIs for high-cardinality product and operations questions.
 
 ## Packages
 
-| Package                  | Role                                                       |
-| ------------------------ | ---------------------------------------------------------- |
-| `@wide-events/sdk`       | Lightweight Node, Lambda, and edge structured event SDK.   |
-| `@wide-events/pino`      | Optional Pino bridge for log mixins and event sinks.       |
-| `@wide-events/client`    | Typed HTTP client for querying the collector.              |
-| `@wide-events/collector` | Collector server, query API, and CLI entrypoint.           |
+| Package | Purpose |
+| --- | --- |
+| `@wide-events/sdk` | Instrument Node, Lambda, and edge apps. |
+| `@wide-events/client` | Query the collector from TypeScript. |
+| `@wide-events/collector` | Run the ingest and query server. |
+| `@wide-events/pino` | Optional Pino bridge for log mixins and event sinks. |
 
-Package-specific docs:
-
-- [packages/sdk/README.md](packages/sdk/README.md)
-- [packages/pino/README.md](packages/pino/README.md)
-- [packages/client/README.md](packages/client/README.md)
-- [packages/collector/README.md](packages/collector/README.md)
-
-Operational notes:
-
-- [wide-events-clickhouse.md](wide-events-clickhouse.md)
+`@wide-events/internal` is a shared implementation package pulled in by the public packages. App developers do not need to install it directly.
 
 ## Quick Start
 
-1. Start a collector.
-2. Point the SDK at the collector URL.
-3. Query the collector with the client or raw HTTP.
-
-### Run the collector from npm
+Start a collector:
 
 ```bash
-WIDE_EVENTS_DUCKDB_PATH=./wide-events.db npx wide-events-collector
+WIDE_EVENTS_DUCKDB_PATH=./wide-events.db npx --package @wide-events/collector wide-events-collector
 ```
 
 The collector listens on `http://localhost:4318` by default.
 
-### Run the collector with Docker
-
-The Docker workflow publishes to `docker.io/oluwasegun7/wide-events-collector`.
+Or run the published Docker image:
 
 ```bash
-docker pull oluwasegun7/wide-events-collector:0.2.0
+docker pull oluwasegun7/wide-events-collector:1.0.0
 
 docker run --rm \
   -e WIDE_EVENTS_DUCKDB_PATH=/data/wide-events.db \
   -v "$(pwd)/wide-events-data:/data" \
   -p 4318:4318 \
-  oluwasegun7/wide-events-collector:0.2.0
+  oluwasegun7/wide-events-collector:1.0.0
 ```
 
-## Instrument an Application
+Instrument an app:
 
 ```bash
 npm install @wide-events/sdk
@@ -78,59 +63,16 @@ app.post("/orders", async (req, res) => {
     { promote: ["order.total"] },
   );
 
+  wideEvents.push("db.queries", {
+    operation: "select_order",
+    duration_ms: 12,
+  });
+
   res.sendStatus(201);
 });
 ```
 
-`annotate()` writes fields onto the active event. `push()` appends nested data such as database calls:
-
-```ts
-wideEvents.push("db.queries", {
-  operation: "select_order",
-  duration_ms: 12,
-});
-```
-
-Optional **auto-instrumentation** for Postgres, AWS SDK v3, Redis (`ioredis`), and outbound `fetch` lives in `@wide-events/sdk` subpaths; see [packages/sdk/README.md](packages/sdk/README.md#instrumentation).
-
-SDK wrappers automatically record thrown errors when they own the execution boundary. Plain Node middleware marks `status >= 500` responses as failed; use SDK route wrappers or platform wrappers when you need exception details without manual `recordError()`.
-
-### Edge and Workers
-
-```ts
-import { WideEvents } from "@wide-events/sdk/edge";
-
-const wideEvents = new WideEvents({
-  serviceName: "edge-gateway",
-  collectorUrl: "https://collector.example.com",
-});
-
-export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    return wideEvents.fetchHandler(request, ctx, () => new Response("ok"));
-  },
-};
-```
-
-### Optional Pino Bridge
-
-```bash
-npm install @wide-events/pino pino
-```
-
-```ts
-import pino from "pino";
-import { pinoEventSink, pinoMixin } from "@wide-events/pino";
-
-const logger = pino();
-const wideEvents = new WideEvents({
-  serviceName: "orders-api",
-  sink: pinoEventSink(logger),
-});
-const requestLogger = pino({ mixin: pinoMixin(wideEvents) });
-```
-
-## Query the Collector
+Query the collector:
 
 ```bash
 npm install @wide-events/client
@@ -148,42 +90,23 @@ const result = await client.query({
 });
 ```
 
-Structured queries default to `scope: "main"`, which means the collector injects `main = true` unless you explicitly set `scope: "all"`. Structured queries target baseline and promoted columns; overflow-only keys remain available through `/sql`.
+Structured queries default to `scope: "main"`, so request-level queries use only main events unless you set `scope: "all"`.
 
-## Collector Configuration
+## Docs
 
-Storage:
+- [SDK](packages/sdk/README.md)
+- [Client](packages/client/README.md)
+- [Collector](packages/collector/README.md)
+- [Pino bridge](packages/pino/README.md)
 
-- `WIDE_EVENTS_STORAGE`: `duckdb` by default; set to `clickhouse` to use ClickHouse.
+Examples:
 
-DuckDB storage:
-
-- `WIDE_EVENTS_DUCKDB_PATH`: path to the DuckDB file
-
-ClickHouse storage:
-
-- `WIDE_EVENTS_CLICKHOUSE_URL`: HTTP(S) endpoint, for example `http://localhost:8123`
-- `WIDE_EVENTS_CLICKHOUSE_DATABASE`: database name; the collector creates it if needed
-- `WIDE_EVENTS_CLICKHOUSE_USERNAME`: default `default`
-- `WIDE_EVENTS_CLICKHOUSE_PASSWORD`: optional
-
-Optional:
-
-- `WIDE_EVENTS_COLLECTOR_PORT`: default `4318`
-- `WIDE_EVENTS_BATCH_SIZE`: default `100`
-- `WIDE_EVENTS_BATCH_TIMEOUT_MS`: default `1000`
-- `WIDE_EVENTS_RETENTION_DAYS`: default `30`
-- `WIDE_EVENTS_MAX_PROMOTED_COLUMNS`: default `200`
-- `WIDE_EVENTS_PROMOTION_INTERVAL_MS`: default `300000`
-- `WIDE_EVENTS_PROMOTION_MIN_ROWS`: default `1000`
-- `WIDE_EVENTS_PROMOTION_MIN_RATIO`: default `0.01`
-- `WIDE_EVENTS_PROMOTION_MAX_KEYS_PER_RUN`: default `25`
-- `WIDE_EVENTS_QUEUE_LIMIT`: default `10000`
+- [Node service](examples/node-service/README.md)
+- [Lambda handler](examples/lambda/README.md)
+- [Worker handler](examples/worker/README.md)
 
 ## Notes
 
 - The collector accepts native wide events at `POST /v1/events`.
-- Event drill-down uses `GET /events/:correlationId`.
-- Overflow-only keys stay queryable through `/sql`, for example with `map_extract_value(attributes_overflow, 'feature.flag')`.
-- `/sql` is intentionally read-only.
-- The collector has no built-in auth. Keep it behind a trusted network boundary.
+- Overflow-only fields remain available through read-only SQL.
+- The collector has no built-in auth. Run it behind a trusted network boundary.

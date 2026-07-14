@@ -3,9 +3,52 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WideEvent } from "@wide-events/internal";
 import type { Cluster, Redis } from "ioredis";
 import type { Pool, PoolClient } from "pg";
+import {
+  createExpressRequestEvent,
+  extractExpressProjectMetadata,
+  wrapExpressResponseBody,
+} from "./express-adapter.js";
+import {
+  createFastifyRequestEvent,
+  extractFastifyProjectMetadata,
+  getFastifyStatusCode,
+  normalizeFastifyPayload,
+} from "./fastify-adapter.js";
+import type {
+  ExpressRequestLike,
+  ExpressResponseLike,
+  FastifyInstanceLike,
+  FastifyPluginLike,
+  FastifyRequestLike,
+  FastifyRequestState,
+  HonoContextLike,
+  HonoMiddlewareLike,
+  HonoNext,
+  NestCallHandlerLike,
+  NestExecutionContextLike,
+  NestInterceptorLike,
+  NestMiddlewareLike,
+  NestObservableLike,
+  NestObserverLike,
+  NextFunction,
+  RequestLike,
+  ResponseLike,
+} from "./framework-types.js";
+import {
+  createHonoRequestEvent,
+  extractHonoProjectMetadata,
+  findMatchingHonoProjectRule,
+  getHonoStatusCode,
+  isResponse,
+  readHonoRequestBody,
+  readHonoResponseBody,
+  ruleUsesSource,
+} from "./hono-adapter.js";
+import { createRequestEvent } from "./http-common.js";
 import { instrumentAwsSdkV3, type AwsSdkV3ClientTarget } from "./instrumentation/aws-sdk-v3.js";
 import { instrumentIoredis } from "./instrumentation/ioredis.js";
 import { instrumentPg } from "./instrumentation/pg.js";
+import { annotateLambdaResult, createLambdaEvent } from "./lambda-adapter.js";
 import {
   CoreWideEvents,
   type ContextStorage,
@@ -15,169 +58,10 @@ import {
 } from "../shared/core.js";
 import type { InstrumentationHooks } from "../shared/instrumentation/types.js";
 import {
-  extractProjectMetadata,
-  findMatchingProjectRule,
-} from "../shared/project-extraction.js";
-import type { ProjectExtractionRule } from "../shared/project-rules.js";
-import {
   resolveNodeOptions,
   type ResolvedWideEventsOptions,
   type WideEventsOptions,
 } from "../shared/options.js";
-
-type NextFunction = (error?: unknown) => void;
-
-interface RequestLike {
-  method?: string | undefined;
-  url?: string | undefined;
-  headers?: Record<string, string | string[] | undefined> | undefined;
-}
-
-interface ResponseLike {
-  statusCode?: number | undefined;
-  once(event: "finish", listener: () => void): unknown;
-}
-
-export interface ExpressRequestLike extends RequestLike {
-  originalUrl?: string | undefined;
-  path?: string | undefined;
-  body?: unknown;
-  query?: unknown;
-  params?: unknown;
-}
-
-export interface ExpressResponseLike extends ResponseLike {
-  json?: ((body: unknown) => unknown) | undefined;
-  send?: ((body?: unknown) => unknown) | undefined;
-}
-
-export interface FastifyRequestLike {
-  method?: string | undefined;
-  url?: string | undefined;
-  routeOptions?: { url?: string | undefined } | undefined;
-  routerPath?: string | undefined;
-  body?: unknown;
-  query?: unknown;
-  params?: unknown;
-  headers?: Record<string, unknown> | undefined;
-}
-
-export interface FastifyReplyLike {
-  statusCode?: number | undefined;
-  raw?: { statusCode?: number | undefined } | undefined;
-}
-
-export type FastifyDone = (error?: Error) => void;
-export type FastifyPayloadDone = (error: Error | null, payload?: unknown) => void;
-
-export interface FastifyInstanceLike {
-  addHook(
-    name: "onRequest" | "onResponse",
-    hook: (
-      request: FastifyRequestLike,
-      reply: FastifyReplyLike,
-    ) => Promise<void> | void,
-  ): unknown;
-  addHook(
-    name: "preHandler",
-    hook: (
-      request: FastifyRequestLike,
-      reply: FastifyReplyLike,
-      done: FastifyDone,
-    ) => void,
-  ): unknown;
-  addHook(
-    name: "preSerialization" | "onSend",
-    hook: (
-      request: FastifyRequestLike,
-      reply: FastifyReplyLike,
-      payload: unknown,
-      done: FastifyPayloadDone,
-    ) => void,
-  ): unknown;
-}
-
-export type FastifyPluginLike = (
-  fastify: FastifyInstanceLike,
-  options: unknown,
-  done: FastifyDone,
-) => void;
-
-interface FastifyRequestState {
-  context: WideEventContext;
-  rules: readonly ProjectExtractionRule[];
-  started: number;
-  responseBody: unknown;
-  hasResponseBody: boolean;
-}
-
-export interface HonoRequestLike {
-  raw?: Request | undefined;
-  method?: string | undefined;
-  path?: string | undefined;
-  body?: unknown;
-  query?: ((name?: string) => unknown) | undefined;
-  param?: ((name?: string) => unknown) | undefined;
-  header?: ((name?: string) => unknown) | undefined;
-}
-
-export interface HonoContextLike {
-  req: HonoRequestLike;
-  res?: Response | undefined;
-}
-
-export type HonoNext = () => Promise<Response | void> | Response | void;
-export type HonoMiddlewareLike = (
-  context: HonoContextLike,
-  next: HonoNext,
-) => Promise<Response | void>;
-
-export type NestNextFunction = (error?: unknown) => void;
-
-export type NestMiddlewareLike = (
-  request: ExpressRequestLike,
-  response: ExpressResponseLike,
-  next: NestNextFunction,
-) => void;
-
-export interface NestHttpArgumentsHostLike {
-  getRequest<TRequest extends ExpressRequestLike = ExpressRequestLike>(): TRequest;
-  getResponse<TResponse extends ExpressResponseLike = ExpressResponseLike>(): TResponse;
-}
-
-export interface NestExecutionContextLike {
-  switchToHttp(): NestHttpArgumentsHostLike;
-}
-
-export interface NestObserverLike<TResult = unknown> {
-  next?: ((value: TResult) => void) | undefined;
-  error?: ((error: unknown) => void) | undefined;
-  complete?: (() => void) | undefined;
-}
-
-export type NestTeardownLike =
-  | (() => void)
-  | { unsubscribe(): void }
-  | void;
-
-export interface NestObservableLike<TResult = unknown> {
-  subscribe(
-    observerOrNext?: NestObserverLike<TResult> | ((value: TResult) => void),
-    error?: (error: unknown) => void,
-    complete?: () => void,
-  ): NestTeardownLike;
-}
-
-export interface NestCallHandlerLike<TResult = unknown> {
-  handle(): NestObservableLike<TResult> | Promise<NestObservableLike<TResult>>;
-}
-
-export interface NestInterceptorLike<TResult = unknown> {
-  intercept(
-    context: NestExecutionContextLike,
-    next: NestCallHandlerLike<TResult>,
-  ): Promise<NestObservableLike<TResult>>;
-}
 
 class AsyncContextStorage implements ContextStorage {
   private readonly storage = new AsyncLocalStorage<WideEventContext>();
@@ -244,8 +128,6 @@ export class WideEvents implements InstrumentationHooks {
   }
 
   annotate: CoreWideEvents["annotate"] = (...args) => this.core.annotate(...args);
-  annotateProject: CoreWideEvents["annotateProject"] = (...args) =>
-    this.core.annotateProject(...args);
   push: CoreWideEvents["push"] = (...args) => this.core.push(...args);
   recordError: CoreWideEvents["recordError"] = (...args) => this.core.recordError(...args);
   wrapFetch: CoreWideEvents["wrapFetch"] = (...args) => this.core.wrapFetch(...args);
@@ -277,7 +159,7 @@ export class WideEvents implements InstrumentationHooks {
               "http.status_code": statusCode,
               duration_ms: Date.now() - started,
             });
-            void this.core.flush();
+            this.core.flushInBackground();
           });
         });
 
@@ -292,17 +174,18 @@ export class WideEvents implements InstrumentationHooks {
       response: ExpressResponseLike,
       next: NextFunction,
     ) => {
-      void this.prepareExpressMiddleware(request, response, next);
+      this.prepareExpressMiddleware(request, response, next);
     };
   }
 
-  private async prepareExpressMiddleware(
+  private prepareExpressMiddleware(
     request: ExpressRequestLike,
     response: ExpressResponseLike,
     next: NextFunction,
-  ): Promise<void> {
+  ): void {
     try {
-      const rules = await this.core.getProjectRules();
+      const rules = this.core.currentProjectRules();
+      this.core.refreshProjectRules();
       const started = Date.now();
       const capture = wrapExpressResponseBody(response);
       const context = this.core.createContext(createExpressRequestEvent(request));
@@ -332,7 +215,7 @@ export class WideEvents implements InstrumentationHooks {
               "http.status_code": statusCode,
               duration_ms: Date.now() - started,
             });
-            void this.core.flush();
+            this.core.flushInBackground();
           });
         });
 
@@ -357,8 +240,9 @@ export class WideEvents implements InstrumentationHooks {
   private registerFastifyHooks(fastify: FastifyInstanceLike): void {
     const states = new WeakMap<FastifyRequestLike, FastifyRequestState>();
 
-    fastify.addHook("onRequest", async (request, _reply) => {
-      const rules = await this.core.getProjectRules();
+    fastify.addHook("onRequest", (request, _reply) => {
+      const rules = this.core.currentProjectRules();
+      this.core.refreshProjectRules();
       states.set(request, {
         context: this.core.createContext(createFastifyRequestEvent(request)),
         rules,
@@ -429,7 +313,7 @@ export class WideEvents implements InstrumentationHooks {
           "http.status_code": statusCode,
           duration_ms: Date.now() - state.started,
         });
-        void this.core.flush();
+        this.core.flushInBackground();
       });
     });
   }
@@ -442,11 +326,10 @@ export class WideEvents implements InstrumentationHooks {
     context: HonoContextLike,
     next: HonoNext,
   ): Promise<Response | void> {
-    const rules = await this.core.getProjectRules();
+    const rules = this.core.currentProjectRules();
+    this.core.refreshProjectRules();
     const request = context.req;
-    const method = getHonoMethod(request);
-    const path = getHonoPath(request);
-    const matchingRule = findMatchingProjectRule(rules, { method, path });
+    const matchingRule = findMatchingHonoProjectRule(rules, request);
     const requestBody = ruleUsesSource(matchingRule, "request.body")
       ? await readHonoRequestBody(request)
       : request.body;
@@ -482,7 +365,7 @@ export class WideEvents implements InstrumentationHooks {
         "http.status_code": statusCode,
         duration_ms: Date.now() - started,
       });
-      void this.core.flush();
+      this.core.flushInBackground();
 
       return nextResult;
     });
@@ -506,7 +389,8 @@ export class WideEvents implements InstrumentationHooks {
     const http = context.switchToHttp();
     const request = http.getRequest();
     const response = http.getResponse();
-    const rules = await this.core.getProjectRules();
+    const rules = this.core.currentProjectRules();
+    this.core.refreshProjectRules();
     const started = Date.now();
     const wideContext = this.core.createContext(createExpressRequestEvent(request));
     const source = await this.storage.run(wideContext, async () => await next.handle());
@@ -544,7 +428,7 @@ export class WideEvents implements InstrumentationHooks {
           "http.status_code": statusCode,
           duration_ms: Date.now() - started,
         });
-        void this.core.flush();
+        this.core.flushInBackground();
       });
     };
 
@@ -617,378 +501,6 @@ export function createWideEvents(
   instrumentation?: WideEventsNodeInstrumentationOptions,
 ): WideEvents {
   return new WideEvents(options, instrumentation);
-}
-
-function createRequestEvent(request: RequestLike): Partial<WideEvent> {
-  const url = request.url ?? "/";
-  return {
-    type: "request",
-    name: `${request.method ?? "GET"} ${getPathname(url)}`,
-    "http.request.method": request.method ?? "GET",
-    "http.route": getPathname(url),
-  };
-}
-
-function createExpressRequestEvent(request: ExpressRequestLike): Partial<WideEvent> {
-  const method = request.method ?? "GET";
-  const path = getExpressPath(request);
-  return {
-    type: "request",
-    name: `${method} ${path}`,
-    "http.request.method": method,
-    "http.route": path,
-  };
-}
-
-function extractExpressProjectMetadata(
-  rules: readonly ProjectExtractionRule[],
-  request: ExpressRequestLike,
-  responseBody: unknown,
-  statusCode: number,
-) {
-  return extractProjectMetadata(rules, {
-    request: {
-      method: request.method ?? "GET",
-      path: getExpressPath(request),
-      body: request.body,
-      query: request.query,
-      params: request.params,
-      headers: request.headers,
-    },
-    response: {
-      body: responseBody,
-      status: statusCode,
-    },
-  });
-}
-
-function createFastifyRequestEvent(request: FastifyRequestLike): Partial<WideEvent> {
-  const method = request.method ?? "GET";
-  const path = getFastifyPath(request);
-  return {
-    type: "request",
-    name: `${method} ${path}`,
-    "http.request.method": method,
-    "http.route": path,
-  };
-}
-
-function extractFastifyProjectMetadata(
-  rules: readonly ProjectExtractionRule[],
-  request: FastifyRequestLike,
-  responseBody: unknown,
-  statusCode: number,
-) {
-  return extractProjectMetadata(rules, {
-    request: {
-      method: request.method ?? "GET",
-      path: getFastifyPath(request),
-      body: request.body,
-      query: request.query,
-      params: request.params,
-      headers: request.headers,
-    },
-    response: {
-      body: responseBody,
-      status: statusCode,
-    },
-  });
-}
-
-function createHonoRequestEvent(request: HonoRequestLike): Partial<WideEvent> {
-  const method = getHonoMethod(request);
-  const path = getHonoPath(request);
-  return {
-    type: "request",
-    name: `${method} ${path}`,
-    "http.request.method": method,
-    "http.route": path,
-  };
-}
-
-function extractHonoProjectMetadata(
-  rules: readonly ProjectExtractionRule[],
-  request: HonoRequestLike,
-  requestBody: unknown,
-  responseBody: unknown,
-  statusCode: number,
-) {
-  return extractProjectMetadata(rules, {
-    request: {
-      method: getHonoMethod(request),
-      path: getHonoPath(request),
-      body: requestBody,
-      query: getHonoQuery(request),
-      params: getHonoParams(request),
-      headers: getHonoHeaders(request),
-    },
-    response: {
-      body: responseBody,
-      status: statusCode,
-    },
-  });
-}
-
-function wrapExpressResponseBody(response: ExpressResponseLike): { body: unknown } {
-  const capture: { body: unknown; lockedByJson: boolean } = {
-    body: undefined,
-    lockedByJson: false,
-  };
-  const originalJson = response.json;
-  const originalSend = response.send;
-
-  if (originalJson) {
-    response.json = function json(this: ExpressResponseLike, body: unknown): unknown {
-      capture.body = body;
-      capture.lockedByJson = true;
-      return originalJson.call(this, body);
-    };
-  }
-
-  if (originalSend) {
-    response.send = function send(this: ExpressResponseLike, body?: unknown): unknown {
-      if (!capture.lockedByJson) {
-        capture.body = body;
-      }
-      return originalSend.call(this, body);
-    };
-  }
-
-  return capture;
-}
-
-function createLambdaEvent(event: unknown): Partial<WideEvent> {
-  const record = isRecord(event) ? event : {};
-  const requestContext = isRecord(record["requestContext"])
-    ? record["requestContext"]
-    : {};
-  const http = isRecord(requestContext["http"]) ? requestContext["http"] : {};
-  return {
-    type: "lambda",
-    name: "lambda invocation",
-    "http.request.method": typeof http["method"] === "string" ? http["method"] : null,
-    "http.route": typeof record["rawPath"] === "string" ? record["rawPath"] : null,
-    attributes: {
-      "lambda.request_id":
-        typeof requestContext["requestId"] === "string"
-          ? requestContext["requestId"]
-          : null,
-    },
-  };
-}
-
-function annotateLambdaResult(core: CoreWideEvents, result: unknown): void {
-  if (!isRecord(result) || typeof result["statusCode"] !== "number") {
-    return;
-  }
-
-  const statusCode = result["statusCode"];
-  core.annotate({
-    "http.status_code": statusCode,
-    error: statusCode >= 500,
-    "exception.slug": statusCode >= 500 ? `http_${statusCode}` : undefined,
-  });
-}
-
-function getPathname(value: string): string {
-  try {
-    return new URL(value, "http://localhost").pathname;
-  } catch {
-    return value;
-  }
-}
-
-function getExpressPath(request: ExpressRequestLike): string {
-  if (typeof request.path === "string") {
-    return request.path;
-  }
-
-  return getPathname(request.originalUrl ?? request.url ?? "/");
-}
-
-function getFastifyPath(request: FastifyRequestLike): string {
-  if (typeof request.routeOptions?.url === "string") {
-    return request.routeOptions.url;
-  }
-
-  if (typeof request.routerPath === "string") {
-    return request.routerPath;
-  }
-
-  return getPathname(request.url ?? "/");
-}
-
-function getFastifyStatusCode(reply: FastifyReplyLike): number {
-  return reply.statusCode ?? reply.raw?.statusCode ?? 200;
-}
-
-function normalizeFastifyPayload(payload: unknown): unknown {
-  if (typeof payload !== "string") {
-    return payload;
-  }
-
-  const trimmed = payload.trim();
-  if (
-    !(
-      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-      (trimmed.startsWith("[") && trimmed.endsWith("]"))
-    )
-  ) {
-    return payload;
-  }
-
-  try {
-    return JSON.parse(payload) as unknown;
-  } catch {
-    return payload;
-  }
-}
-
-function getHonoMethod(request: HonoRequestLike): string {
-  return request.method ?? request.raw?.method ?? "GET";
-}
-
-function getHonoPath(request: HonoRequestLike): string {
-  if (typeof request.path === "string") {
-    return request.path;
-  }
-
-  if (typeof request.raw?.url === "string") {
-    return getPathname(request.raw.url);
-  }
-
-  return "/";
-}
-
-function getHonoQuery(request: HonoRequestLike): unknown {
-  const query = callHonoAccessor(request.query);
-  if (typeof query !== "undefined") {
-    return query;
-  }
-
-  if (typeof request.raw?.url !== "string") {
-    return undefined;
-  }
-
-  try {
-    return urlSearchParamsToRecord(new URL(request.raw.url).searchParams);
-  } catch {
-    return undefined;
-  }
-}
-
-function getHonoParams(request: HonoRequestLike): unknown {
-  return callHonoAccessor(request.param);
-}
-
-function getHonoHeaders(request: HonoRequestLike): Headers | Record<string, unknown> | undefined {
-  const headers = callHonoAccessor(request.header);
-  if (isRecord(headers)) {
-    return headers;
-  }
-
-  return request.raw?.headers;
-}
-
-function getHonoStatusCode(response: Response | undefined): number {
-  return response?.status ?? 200;
-}
-
-function ruleUsesSource(
-  rule: ProjectExtractionRule | null,
-  source: ProjectExtractionRule["fields"][number]["source"],
-): boolean {
-  return rule?.fields.some((field) => field.source === source) ?? false;
-}
-
-async function readHonoRequestBody(request: HonoRequestLike): Promise<unknown> {
-  if (typeof request.body !== "undefined") {
-    return request.body;
-  }
-
-  const raw = request.raw;
-  if (!raw || raw.bodyUsed) {
-    return undefined;
-  }
-
-  try {
-    return await readFetchBody(raw.clone(), raw.headers);
-  } catch {
-    return undefined;
-  }
-}
-
-async function readHonoResponseBody(response: Response | undefined): Promise<unknown> {
-  if (!response || response.bodyUsed) {
-    return undefined;
-  }
-
-  try {
-    return await readFetchBody(response.clone(), response.headers);
-  } catch {
-    return undefined;
-  }
-}
-
-async function readFetchBody(
-  body: Pick<Request, "json" | "text"> | Pick<Response, "json" | "text">,
-  headers: Headers,
-): Promise<unknown> {
-  const contentType = headers.get("content-type")?.toLowerCase() ?? "";
-  if (contentType.includes("application/json")) {
-    return await body.json();
-  }
-
-  const text = await body.text();
-  return parseJsonLikeText(text);
-}
-
-function parseJsonLikeText(text: string): unknown {
-  const trimmed = text.trim();
-  if (
-    !(
-      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-      (trimmed.startsWith("[") && trimmed.endsWith("]"))
-    )
-  ) {
-    return text;
-  }
-
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return text;
-  }
-}
-
-function callHonoAccessor(
-  accessor: ((name?: string) => unknown) | undefined,
-): unknown {
-  if (!accessor) {
-    return undefined;
-  }
-
-  try {
-    return accessor();
-  } catch {
-    return undefined;
-  }
-}
-
-function urlSearchParamsToRecord(params: URLSearchParams): Record<string, string | string[]> {
-  const record: Record<string, string | string[]> = {};
-  for (const [key, value] of params) {
-    const existing = record[key];
-    if (typeof existing === "undefined") {
-      record[key] = value;
-    } else if (Array.isArray(existing)) {
-      record[key] = [...existing, value];
-    } else {
-      record[key] = [existing, value];
-    }
-  }
-
-  return record;
 }
 
 type NestContextRunner = <TResult>(callback: () => TResult) => TResult;
@@ -1064,19 +576,32 @@ function normalizeNestObserver<TResult>(
   };
 }
 
-function isResponse(value: unknown): value is Response {
-  return value instanceof Response;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 export type { WideEventsOptions, WideEventSink, RecordErrorOptions };
 export type { InstrumentationHooks } from "../shared/instrumentation/types.js";
 export type {
-  AnnotateProjectOptions,
-  ProjectAnnotationFields,
+  ExpressRequestLike,
+  ExpressResponseLike,
+  FastifyDone,
+  FastifyInstanceLike,
+  FastifyPayloadDone,
+  FastifyPluginLike,
+  FastifyReplyLike,
+  FastifyRequestLike,
+  HonoContextLike,
+  HonoMiddlewareLike,
+  HonoNext,
+  HonoRequestLike,
+  NestCallHandlerLike,
+  NestExecutionContextLike,
+  NestHttpArgumentsHostLike,
+  NestInterceptorLike,
+  NestMiddlewareLike,
+  NestNextFunction,
+  NestObservableLike,
+  NestObserverLike,
+  NestTeardownLike,
+} from "./framework-types.js";
+export type {
   ProjectRoutingOption,
 } from "../shared/projects.js";
 export {

@@ -103,8 +103,8 @@ export class AttributeCatalog {
     }
 
     for (const entry of updates.values()) {
-      this.entries.set(entry.key, entry);
       await persistEntry(database, entry);
+      this.entries.set(entry.key, entry);
     }
   }
 
@@ -152,8 +152,8 @@ export class AttributeCatalog {
       storageState: "promoting",
       lastError: null
     };
-    this.entries.set(key, updated);
     await persistEntry(database, updated);
+    this.entries.set(key, updated);
     return updated;
   }
 
@@ -188,8 +188,8 @@ export class AttributeCatalog {
       promotedAt: new Date().toISOString(),
       lastError: null
     };
-    this.entries.set(key, updated);
     await persistEntry(database, updated);
+    this.entries.set(key, updated);
   }
 
   async markFailed(database: CollectorDatabase, key: string, error: unknown): Promise<void> {
@@ -203,8 +203,8 @@ export class AttributeCatalog {
       storageState: "failed",
       lastError: error instanceof Error ? error.message : String(error)
     };
-    this.entries.set(key, updated);
     await persistEntry(database, updated);
+    this.entries.set(key, updated);
   }
 }
 

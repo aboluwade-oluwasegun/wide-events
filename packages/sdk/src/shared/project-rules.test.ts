@@ -147,6 +147,46 @@ describe("ProjectRulesManager", () => {
         }),
       ],
     });
+    expect(manager.currentRules()).toEqual([
+      expect.objectContaining({
+        project_id: "project_checkout",
+        project_rule_version: "rules-v1",
+      }),
+    ]);
+  });
+
+  it("starts background refreshes without blocking current-rule reads", async () => {
+    const discovery = createDeferred<Response>();
+    const fetchImpl = vi.fn<typeof fetch>().mockReturnValue(discovery.promise);
+    const manager = new ProjectRulesManager({
+      projects: {
+        ids: ["project_checkout"],
+        refreshIntervalMs: 1_000,
+      },
+      apiKey: "we_key_123",
+      apiUrl: "https://api.example.com/",
+      fetchImpl,
+    });
+
+    manager.refreshSoon();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(manager.currentRules()).toEqual([]);
+
+    discovery.resolve(jsonResponse(createDiscoveryResponse("rules-v1")));
+
+    await expect(manager.getRules()).resolves.toEqual([
+      expect.objectContaining({
+        project_id: "project_checkout",
+        project_rule_version: "rules-v1",
+      }),
+    ]);
+    expect(manager.currentRules()).toEqual([
+      expect.objectContaining({
+        project_id: "project_checkout",
+        project_rule_version: "rules-v1",
+      }),
+    ]);
   });
 
   it("caches discovered rules until the refresh interval expires, then polls the CDN", async () => {
@@ -374,4 +414,16 @@ function jsonResponse(payload: unknown): Response {
     status: 200,
     headers: { "content-type": "application/json" },
   });
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+
+  return { promise, resolve };
 }

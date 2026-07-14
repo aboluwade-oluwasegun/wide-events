@@ -91,6 +91,7 @@ describe("WideEvents Nest adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const response = new FakeNestResponse();
 
     await invokeNestMiddleware(
@@ -154,6 +155,7 @@ describe("WideEvents Nest adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const response = new FakeNestResponse();
     response.statusCode = 201;
     const context = new FakeNestExecutionContext(
@@ -216,6 +218,7 @@ describe("WideEvents Nest adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const response = new FakeNestResponse();
     const context = new FakeNestExecutionContext(
       {

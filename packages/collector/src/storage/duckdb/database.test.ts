@@ -30,36 +30,38 @@ describe("DuckDbDatabase", () => {
   });
 
   it("inserts project event rows into project_events", async () => {
-    await database.insertProjectEventRows(
-      [
-        "correlation_id",
-        "event_id",
-        "main",
-        "project_field_types",
-        "project_fields",
-        "project_id",
-        "project_rule_version",
-        "sample_rate",
-        "ts",
-      ],
-      [
-        {
-          correlation_id: "corr-project",
-          event_id: "event-project",
-          main: true,
-          project_field_types: {
-            "order.total": "DOUBLE",
+    await database.writeIngestBatch({
+      projectEventRows: {
+        columns: [
+          "correlation_id",
+          "event_id",
+          "main",
+          "project_field_types",
+          "project_fields",
+          "project_id",
+          "project_rule_version",
+          "sample_rate",
+          "ts",
+        ],
+        rows: [
+          {
+            correlation_id: "corr-project",
+            event_id: "event-project",
+            main: true,
+            project_field_types: {
+              "order.total": "DOUBLE",
+            },
+            project_fields: {
+              "order.total": 42.5,
+            },
+            project_id: "project_123",
+            project_rule_version: "2026-07-01",
+            sample_rate: 1,
+            ts: "2024-01-01T00:00:00.000Z",
           },
-          project_fields: {
-            "order.total": 42.5,
-          },
-          project_id: "project_123",
-          project_rule_version: "2026-07-01",
-          sample_rate: 1,
-          ts: "2024-01-01T00:00:00.000Z",
-        },
-      ],
-    );
+        ],
+      },
+    });
 
     const rows = await database.executeRead(
       "SELECT project_id, project_rule_version, project_fields, project_field_types FROM project_events WHERE event_id = ?",

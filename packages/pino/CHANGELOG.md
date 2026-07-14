@@ -1,5 +1,17 @@
 # @wide-events/pino
 
+## 1.0.0
+
+### Major Changes
+
+- Release the stable v1 package suite with ClickHouse storage, hardened collector storage behavior, smaller framework-specific SDK adapters, and consolidated package documentation.
+
+### Patch Changes
+
+- Updated dependencies
+  - @wide-events/internal@1.0.0
+  - @wide-events/sdk@1.0.0
+
 ## 0.1.0
 
 ### Minor Changes

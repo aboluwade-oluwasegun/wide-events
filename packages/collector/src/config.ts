@@ -58,23 +58,42 @@ export function readCollectorConfig(
       username: env["WIDE_EVENTS_CLICKHOUSE_USERNAME"] ?? "default",
       password: env["WIDE_EVENTS_CLICKHOUSE_PASSWORD"]
     },
-    port: parseInteger(env["WIDE_EVENTS_COLLECTOR_PORT"], 4318),
-    batchSize: parseInteger(env["WIDE_EVENTS_BATCH_SIZE"], 100),
-    batchTimeoutMs: parseInteger(env["WIDE_EVENTS_BATCH_TIMEOUT_MS"], 1_000),
-    retentionDays: parseInteger(env["WIDE_EVENTS_RETENTION_DAYS"], 30),
-    maxPromotedColumns: parseInteger(env["WIDE_EVENTS_MAX_PROMOTED_COLUMNS"], 200),
+    port: parseInteger("WIDE_EVENTS_COLLECTOR_PORT", env["WIDE_EVENTS_COLLECTOR_PORT"], 4318),
+    batchSize: parseInteger("WIDE_EVENTS_BATCH_SIZE", env["WIDE_EVENTS_BATCH_SIZE"], 100),
+    batchTimeoutMs: parseInteger(
+      "WIDE_EVENTS_BATCH_TIMEOUT_MS",
+      env["WIDE_EVENTS_BATCH_TIMEOUT_MS"],
+      1_000,
+    ),
+    retentionDays: parseInteger("WIDE_EVENTS_RETENTION_DAYS", env["WIDE_EVENTS_RETENTION_DAYS"], 30),
+    maxPromotedColumns: parseInteger(
+      "WIDE_EVENTS_MAX_PROMOTED_COLUMNS",
+      env["WIDE_EVENTS_MAX_PROMOTED_COLUMNS"],
+      200,
+    ),
     promotionIntervalMs: parseInteger(
+      "WIDE_EVENTS_PROMOTION_INTERVAL_MS",
       env["WIDE_EVENTS_PROMOTION_INTERVAL_MS"],
       300_000
     ),
-    promotionMinRows: parseInteger(env["WIDE_EVENTS_PROMOTION_MIN_ROWS"], 1_000),
-    promotionMinRatio: parseNumber(env["WIDE_EVENTS_PROMOTION_MIN_RATIO"], 0.01),
+    promotionMinRows: parseInteger(
+      "WIDE_EVENTS_PROMOTION_MIN_ROWS",
+      env["WIDE_EVENTS_PROMOTION_MIN_ROWS"],
+      1_000,
+    ),
+    promotionMinRatio: parseNumber(
+      "WIDE_EVENTS_PROMOTION_MIN_RATIO",
+      env["WIDE_EVENTS_PROMOTION_MIN_RATIO"],
+      0.01,
+    ),
     promotionMaxKeysPerRun: parseInteger(
+      "WIDE_EVENTS_PROMOTION_MAX_KEYS_PER_RUN",
       env["WIDE_EVENTS_PROMOTION_MAX_KEYS_PER_RUN"],
       1
     ),
-    queueLimit: parseInteger(env["WIDE_EVENTS_QUEUE_LIMIT"], 10_000),
+    queueLimit: parseInteger("WIDE_EVENTS_QUEUE_LIMIT", env["WIDE_EVENTS_QUEUE_LIMIT"], 10_000),
     projectConfigTtlSeconds: parseInteger(
+      "WIDE_EVENTS_PROJECT_CONFIG_TTL_SECONDS",
       env["WIDE_EVENTS_PROJECT_CONFIG_TTL_SECONDS"],
       60
     ),
@@ -99,20 +118,35 @@ function parseProjectConfigs(value: string | undefined): unknown {
   }
 }
 
-function parseInteger(value: string | undefined, fallback: number): number {
-  if (!value) {
+function parseInteger(name: string, value: string | undefined, fallback: number): number {
+  if (typeof value === "undefined") {
     return fallback;
   }
 
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  const parsed = parseFullNumber(name, value);
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${name} must be an integer`);
+  }
+  return parsed;
 }
 
-function parseNumber(value: string | undefined, fallback: number): number {
-  if (!value) {
+function parseNumber(name: string, value: string | undefined, fallback: number): number {
+  if (typeof value === "undefined") {
     return fallback;
   }
 
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return parseFullNumber(name, value);
+}
+
+function parseFullNumber(name: string, value: string): number {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${name} must be a number`);
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${name} must be a number`);
+  }
+  return parsed;
 }

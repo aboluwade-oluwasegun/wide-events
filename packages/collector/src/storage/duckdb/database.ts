@@ -16,6 +16,7 @@ import {
 } from "../attribute-catalog-row.js";
 import type {
   CollectorDatabase,
+  CollectorIngestBatch,
   CollectorInsertRow,
   CollectorTableColumn,
 } from "../types.js";
@@ -106,25 +107,31 @@ export class DuckDbDatabase implements CollectorDatabase {
     ]);
   }
 
-  async insertEventRows(
-    columns: readonly string[],
-    rows: readonly CollectorInsertRow[],
-  ): Promise<void> {
-    if (rows.length === 0) {
+  async writeIngestBatch(batch: CollectorIngestBatch): Promise<void> {
+    if (
+      (!batch.eventRows || batch.eventRows.rows.length === 0) &&
+      (!batch.projectEventRows || batch.projectEventRows.rows.length === 0)
+    ) {
       return;
     }
 
-    const values: unknown[] = [];
-    for (const row of rows) {
-      for (const column of columns) {
-        values.push(serializeDuckDbInsertValue(column, row[column]));
-      }
+    await this.execute("BEGIN TRANSACTION");
+    try {
+      await this.insertRows("events", batch.eventRows?.columns ?? [], batch.eventRows?.rows ?? []);
+      await this.insertRows(
+        "project_events",
+        batch.projectEventRows?.columns ?? [],
+        batch.projectEventRows?.rows ?? [],
+      );
+      await this.execute("COMMIT");
+    } catch (error) {
+      await this.execute("ROLLBACK").catch(() => undefined);
+      throw error;
     }
-
-    await this.execute(buildDuckDbInsertSql("events", columns, rows.length), values);
   }
 
-  async insertProjectEventRows(
+  private async insertRows(
+    table: "events" | "project_events",
     columns: readonly string[],
     rows: readonly CollectorInsertRow[],
   ): Promise<void> {
@@ -140,7 +147,7 @@ export class DuckDbDatabase implements CollectorDatabase {
     }
 
     await this.execute(
-      buildDuckDbInsertSql("project_events", columns, rows.length),
+      buildDuckDbInsertSql(table, columns, rows.length),
       values,
     );
   }

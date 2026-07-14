@@ -99,6 +99,33 @@ describe("readCollectorConfig", () => {
     ).toThrow(/WIDE_EVENTS_PROJECTS must be valid JSON/);
   });
 
+  it("rejects malformed integer env values instead of falling back", () => {
+    expect(() =>
+      readCollectorConfig({
+        WIDE_EVENTS_DUCKDB_PATH: "./wide-events.db",
+        WIDE_EVENTS_BATCH_SIZE: "25ms"
+      })
+    ).toThrow(/WIDE_EVENTS_BATCH_SIZE must be a number/);
+  });
+
+  it("rejects malformed number env values instead of falling back", () => {
+    expect(() =>
+      readCollectorConfig({
+        WIDE_EVENTS_DUCKDB_PATH: "./wide-events.db",
+        WIDE_EVENTS_PROMOTION_MIN_RATIO: "0.25x"
+      })
+    ).toThrow(/WIDE_EVENTS_PROMOTION_MIN_RATIO must be a number/);
+  });
+
+  it("rejects empty numeric env values instead of falling back", () => {
+    expect(() =>
+      readCollectorConfig({
+        WIDE_EVENTS_DUCKDB_PATH: "./wide-events.db",
+        WIDE_EVENTS_COLLECTOR_PORT: ""
+      })
+    ).toThrow(/WIDE_EVENTS_COLLECTOR_PORT must be a number/);
+  });
+
   it("defaults the ClickHouse username when omitted", () => {
     const config = readCollectorConfig({
       WIDE_EVENTS_STORAGE: "clickhouse",

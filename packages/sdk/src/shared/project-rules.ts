@@ -61,6 +61,29 @@ export class ProjectRulesManager {
       : null;
   }
 
+  currentRules(): readonly ProjectExtractionRule[] {
+    return this.cachedDiscovery?.rules ?? [];
+  }
+
+  refreshSoon(): void {
+    if (!this.enabled || this.refreshPromise) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now < this.nextRefreshAt) {
+      return;
+    }
+
+    const promise = this.refresh(now);
+    this.refreshPromise = promise;
+    void promise.finally(() => {
+      if (this.refreshPromise === promise) {
+        this.refreshPromise = null;
+      }
+    });
+  }
+
   async getRules(): Promise<readonly ProjectExtractionRule[]> {
     const discovery = await this.getDiscovery();
     return discovery?.rules ?? [];

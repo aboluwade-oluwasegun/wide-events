@@ -13,6 +13,7 @@ import {
 } from "../attribute-catalog-row.js";
 import type {
   CollectorDatabase,
+  CollectorIngestBatch,
   CollectorInsertRow,
   CollectorTableColumn,
 } from "../types.js";
@@ -116,18 +117,13 @@ WHERE isNull(${clickHouseQuoteIdentifier(column)})
     });
   }
 
-  async insertEventRows(
-    columns: readonly string[],
-    rows: readonly CollectorInsertRow[],
-  ): Promise<void> {
-    await this.insertRows("events", columns, rows);
-  }
-
-  async insertProjectEventRows(
-    columns: readonly string[],
-    rows: readonly CollectorInsertRow[],
-  ): Promise<void> {
-    await this.insertRows("project_events", columns, rows);
+  async writeIngestBatch(batch: CollectorIngestBatch): Promise<void> {
+    await this.insertRows("events", batch.eventRows?.columns ?? [], batch.eventRows?.rows ?? []);
+    await this.insertRows(
+      "project_events",
+      batch.projectEventRows?.columns ?? [],
+      batch.projectEventRows?.rows ?? [],
+    );
   }
 
   async loadAttributeCatalog(): Promise<AttributeCatalogEntry[]> {

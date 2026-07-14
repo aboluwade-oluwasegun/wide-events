@@ -5,7 +5,6 @@
 **/node_modules/
 
 wide-events-*.md
-!wide-events-clickhouse.md
 **/tsconfig.tsbuildinfo
 
 # TypeScript / package build output (`pnpm build`); never commit

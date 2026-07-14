@@ -131,6 +131,7 @@ describe("WideEvents Fastify adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const fastify = installFastifyPlugin(wide);
 
     await fastify.inject({
@@ -195,6 +196,7 @@ describe("WideEvents Fastify adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const fastify = installFastifyPlugin(wide);
     const reply = new FakeFastifyReply().code(201);
 
@@ -247,6 +249,7 @@ describe("WideEvents Fastify adapter", () => {
         },
       ],
     });
+    await wide.getProjectRules();
     const fastify = installFastifyPlugin(wide);
 
     await fastify.inject({
