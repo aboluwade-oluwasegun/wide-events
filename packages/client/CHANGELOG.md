@@ -1,5 +1,16 @@
 # @wide-events/client
 
+## 1.0.0
+
+### Major Changes
+
+- 422e67d: Release the stable v1 package suite with ClickHouse storage, hardened collector storage behavior, smaller framework-specific SDK adapters, and consolidated package documentation.
+
+### Patch Changes
+
+- Updated dependencies [422e67d]
+  - @wide-events/internal@1.0.0
+
 ## 0.3.0
 
 ### Minor Changes
