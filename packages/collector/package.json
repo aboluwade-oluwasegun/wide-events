@@ -1,6 +1,6 @@
 {
   "name": "@wide-events/collector",
-  "version": "1.0.0",
+  "version": "0.3.2",
   "type": "module",
   "license": "AGPL-3.0-only",
   "engines": {
